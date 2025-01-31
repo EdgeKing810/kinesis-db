@@ -76,6 +76,18 @@ impl PageStore {
         
         let page_count = (file.metadata()?.len() / PAGE_SIZE as u64).max(1);
         
+        // Initialize the first page if the file is empty
+        if file.metadata()?.len() == 0 {
+            let mut page_store = PageStore {
+                file,
+                page_count,
+                free_pages: Vec::new(),
+            };
+            let first_page = Page::new(0);
+            page_store.write_page(&first_page)?;
+            return Ok(page_store);
+        }
+
         Ok(PageStore {
             file,
             page_count,

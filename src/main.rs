@@ -156,65 +156,76 @@ impl WriteAheadLog {
         let mut transactions = Vec::new();
 
         for line in reader.lines() {
-            let log_entry: serde_json::Value = serde_json::from_str(&line.unwrap()).unwrap();
-            let entry_data = &log_entry["data"];
-            let status = log_entry["status"].as_str().unwrap_or("pending");
-            
-            // Only process pending transactions
-            if status != "pending" {
-                continue;
+            match line {
+                Ok(line) => {
+                    let log_entry: serde_json::Value = match serde_json::from_str(&line) {
+                        Ok(entry) => entry,
+                        Err(_) => continue, // Skip invalid JSON lines
+                    };
+                    let entry_data = &log_entry["data"];
+                    let status = log_entry["status"].as_str().unwrap_or("pending");
+
+                    // Only process pending transactions
+                    if status != "pending" {
+                        continue;
+                    }
+
+                    let tx_id = log_entry["tx_id"].as_u64().unwrap();
+                    let mut tx = Transaction::new(
+                        tx_id,
+                        IsolationLevel::ReadCommitted,
+                        None,
+                    );
+
+                    // Update transaction data
+                    if let Some(creates) = entry_data["creates"].as_array() {
+                        tx.pending_table_creates = creates.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect();
+                    }
+
+                    if let Some(drops) = entry_data["drops"].as_array() {
+                        tx.pending_table_drops = drops.iter()
+                            .filter_map(|v| v.as_str().map(String::from))
+                            .collect();
+                    }
+
+                    tx.pending_inserts = entry_data["inserts"]
+                        .as_array()
+                        .unwrap_or(&Vec::new())
+                        .iter()
+                        .filter_map(|v| {
+                            serde_json::from_value(v.clone())
+                                .ok()
+                                .map(|(table_name, record): (String, Record)| (table_name, record))
+                        })
+                        .collect();
+
+                    tx.pending_deletes = entry_data["deletes"]
+                        .as_array()
+                        .unwrap_or(&Vec::new())
+                        .iter()
+                        .filter_map(|v| {
+                            serde_json::from_value(v.clone())
+                                .ok()
+                                .map(|(table_name, id, record): (String, u64, Record)| (table_name, id, record))
+                        })
+                        .collect();
+
+                    tx.start_timestamp = entry_data["timestamp"].as_u64().unwrap_or_else(|| {
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs()
+                    });
+
+                    transactions.push(tx);
+                }
+                Err(e) => {
+                    println!("Error reading WAL entry: {}", e); // Add error logging
+                    continue; // Skip invalid lines
+                }
             }
-
-            let tx_id = entry_data["tx_id"].as_u64().unwrap();
-            let mut tx = Transaction::new(
-                tx_id,
-                IsolationLevel::ReadCommitted,
-                None,
-            );
-
-            // Update transaction data
-            if let Some(creates) = entry_data["creates"].as_array() {
-                tx.pending_table_creates = creates.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect();
-            }
-
-            if let Some(drops) = entry_data["drops"].as_array() {
-                tx.pending_table_drops = drops.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect();
-            }
-
-            tx.pending_inserts = entry_data["inserts"]
-                .as_array()
-                .unwrap_or(&Vec::new())
-                .iter()
-                .filter_map(|v| {
-                    serde_json::from_value(v.clone())
-                        .ok()
-                        .map(|(table_name, record): (String, Record)| (table_name, record))
-                })
-                .collect();
-
-            tx.pending_deletes = entry_data["deletes"]
-                .as_array()
-                .unwrap_or(&Vec::new())
-                .iter()
-                .filter_map(|v| {
-                    serde_json::from_value(v.clone())
-                        .ok()
-                        .map(|(table_name, id, record): (String, u64, Record)| (table_name, id, record))
-                })
-                .collect();
-
-            tx.start_timestamp = entry_data["timestamp"].as_u64().unwrap_or_else(|| {
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_secs()
-            });
-
-            transactions.push(tx);
         }
 
         transactions
@@ -235,27 +246,47 @@ impl WriteAheadLog {
             status: "pending".to_string(),
         };
 
-        bincode::serialize_into(&mut self.file, &entry)
+        let entry_str = serde_json::to_string(&entry)
+            .map_err(|e| format!("Failed to serialize WAL entry to JSON: {}", e))?;
+
+        // Ensure the file is opened in append mode
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("wal.log")
+            .map_err(|e| format!("Failed to open WAL for appending: {}", e))?;
+
+        writeln!(file, "{}", entry_str)
             .map_err(|e| format!("Failed to write WAL entry: {}", e))?;
         
+        file.flush()
+            .map_err(|e| format!("Failed to flush WAL: {}", e))?;
+
         Ok(checksum)
     }
 
     fn mark_transaction_complete(&mut self, tx_id: u64) -> Result<(), String> {
-        let mut content = String::new();
         let file = File::open("wal.log").map_err(|e| format!("Failed to open WAL: {}", e))?;
-        BufReader::new(file).read_to_string(&mut content)
-            .map_err(|e| format!("Failed to read WAL: {}", e))?;
+        let reader = BufReader::new(file);
+        let mut content = String::new();
 
-        let updated = content.lines()
-            .map(|line| {
-                let mut entry: serde_json::Value = serde_json::from_str(line).unwrap();
-                if entry["data"]["tx_id"].as_u64() == Some(tx_id) {
-                    entry["status"] = json!("completed");
+        for line in reader.lines() {
+            match line {
+                Ok(line) => {
+                    let mut entry: serde_json::Value = match serde_json::from_str(&line) {
+                        Ok(entry) => entry,
+                        Err(_) => continue, // Skip invalid JSON lines
+                    };
+
+                    if entry["tx_id"].as_u64() == Some(tx_id) {
+                        entry["status"] = json!("completed");
+                    }
+                    content.push_str(&serde_json::to_string(&entry).unwrap());
+                    content.push('\n');
                 }
-                entry
-            })
-            .collect::<Vec<_>>();
+                Err(_) => continue, // Skip invalid lines
+            }
+        }
 
         let file = OpenOptions::new()
             .write(true)
@@ -264,12 +295,10 @@ impl WriteAheadLog {
             .map_err(|e| format!("Failed to open WAL for writing: {}", e))?;
         
         let mut writer = BufWriter::new(file);
-        for entry in updated {
-            serde_json::to_writer(&mut writer, &entry)
-                .map_err(|e| format!("Failed to write WAL entry: {}", e))?;
-            writer.write_all(b"\n")
-                .map_err(|e| format!("Failed to write WAL newline: {}", e))?;
-        }
+        writer.write_all(content.as_bytes())
+            .map_err(|e| format!("Failed to write WAL: {}", e))?;
+        writer.flush()
+            .map_err(|e| format!("Failed to flush WAL: {}", e))?;
         
         Ok(())
     }
@@ -541,19 +570,6 @@ pub struct DBEngine {
     page_store: PageStore,
 }
 
-// Add helper struct for consistent serialization
-struct CanonicalWriter<W: Write>(W);
-
-impl<W: Write> Write for CanonicalWriter<W> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.write(buf)
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        self.0.flush()
-    }
-}
-
 // Add a CommitGuard to ensure proper cleanup
 struct CommitGuard<'a> {
     engine: &'a mut DBEngine,
@@ -823,10 +839,8 @@ impl DBEngine {
             self.wal.mark_transaction_complete(tx.id)?;
 
             // Cleanup WAL periodically (every 100 transactions)
-            if tx.id % 100 == 0 {
-                if let Err(e) = self.wal.cleanup_completed_transactions() {
-                    eprintln!("Warning: WAL cleanup failed: {}", e);
-                }
+            if let Err(e) = self.wal.cleanup_completed_transactions() {
+                eprintln!("Warning: WAL cleanup failed: {}", e);
             }
 
             Ok(())
@@ -1098,7 +1112,6 @@ impl DBEngine {
 
         // Read metadata from first page
         if let Ok(page) = self.page_store.read_page(0) {
-            // Access data directly instead of using read_data
             if let Ok(db) = bincode::deserialize(&page.data) {
                 let mut db_lock = self.db.write().unwrap();
                 *db_lock = db;
@@ -1106,48 +1119,43 @@ impl DBEngine {
         }
     }
 
-    fn save_to_disk(&mut self) -> Result<(), String> {
+    fn save_to_disk(&mut self) -> Result<u64, String> {
         let db_lock = self.db.read().unwrap();
-        
-        // Allocate a new page for the database state
-        let page_id = self.page_store.allocate_page()
-            .map_err(|e| format!("Failed to allocate page: {}", e))?;
         
         // Serialize database state
         let data = bincode::serialize(&*db_lock)
             .map_err(|e| format!("Failed to serialize DB: {}", e))?;
         
+        // Allocate a new page for the database state
+        let page_id = self.page_store.allocate_page()
+            .map_err(|e| format!("Failed to allocate page: {}", e))?;
+        
         // Write to newly allocated page
         let mut meta_page = Page::new(page_id);
         meta_page.write_data(0, &data)
             .map_err(|e| format!("Failed to write data: {}", e))?;
-        
-        // Write the page and free the old one if it exists
-        if page_id > 0 {
-            self.page_store.free_page(page_id - 1);
-        }
         self.page_store.write_page(&meta_page)
             .map_err(|e| format!("Failed to write page: {}", e))?;
         
-        Ok(())
+        // Free the old page if it exists
+        if page_id > 0 {
+            self.page_store.free_page(page_id - 1);
+        }
+        
+        // Calculate checksum
+        let checksum = self.calculate_checksum(&*db_lock)?;
+        
+        Ok(checksum)
     }
 
     fn save_to_disk_with_verification(&mut self, expected_checksum: u64) -> Result<(), String> {
-        self.save_to_disk()?;
+        let actual_checksum = self.save_to_disk()?;
 
-        // Verify by reading back
-        if let Ok(page) = self.page_store.read_page(0) {
-            let db: Database = bincode::deserialize(&page.data)
-                .map_err(|e| format!("Failed to deserialize DB: {}", e))?;
-
-            let actual_checksum = self.calculate_checksum(&db)?;
-
-            if actual_checksum != expected_checksum {
-                return Err(format!(
-                    "Checksum verification failed. Expected: {}, Got: {}",
-                    expected_checksum, actual_checksum
-                ));
-            }
+        if actual_checksum != expected_checksum {
+            return Err(format!(
+                "Checksum verification failed. Expected: {}, Got: {}",
+                expected_checksum, actual_checksum
+            ));
         }
 
         Ok(())
