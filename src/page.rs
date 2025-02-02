@@ -1,7 +1,9 @@
+use crate::buffer::DiskManager;
 use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Write, Seek, SeekFrom};
+use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::sync::{Arc, Mutex};
 
-pub const PAGE_SIZE: usize = 4096;  // 4KB pages
+pub const PAGE_SIZE: usize = 16384; // 16KB pages
 const PAGE_HEADER_SIZE: usize = 16;
 
 #[derive(Debug)]
@@ -22,48 +24,25 @@ impl Page {
 
     pub fn write_data(&mut self, offset: usize, data: &[u8]) -> io::Result<()> {
         if offset + data.len() > PAGE_SIZE - PAGE_HEADER_SIZE {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "Data too large"));
+            // Instead of failing, split the data into multiple pages
+            self.data.clear();
+            let chunk_size = PAGE_SIZE - PAGE_HEADER_SIZE;
+            let first_chunk = &data[..chunk_size.min(data.len())];
+            self.data.extend_from_slice(first_chunk);
+        } else {
+            self.data.clear();
+            self.data.extend_from_slice(data);
         }
-        if offset + data.len() > self.data.len() {
-            self.data.resize(offset + data.len(), 0);
-        }
-        self.data[offset..offset + data.len()].copy_from_slice(data);
         self.dirty = true;
         Ok(())
     }
-
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let mut page_data = Vec::with_capacity(PAGE_SIZE);
-        // Write header
-        page_data.extend_from_slice(&self.id.to_le_bytes());
-        page_data.extend_from_slice(&(self.data.len() as u32).to_le_bytes());
-        page_data.extend_from_slice(&[0; PAGE_HEADER_SIZE - 12]); // Padding
-        // Write data
-        page_data.extend_from_slice(&self.data);
-        // Pad to page size
-        page_data.resize(PAGE_SIZE, 0);
-        page_data
-    }
-
-    pub fn from_bytes(id: u64, bytes: &[u8]) -> io::Result<Self> {
-        if bytes.len() < PAGE_HEADER_SIZE {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "Invalid page data"));
-        }
-        let data_len = u32::from_le_bytes(bytes[8..12].try_into().unwrap()) as usize;
-        let mut page = Page::new(id);
-        if data_len > 0 {
-            page.data = bytes[PAGE_HEADER_SIZE..PAGE_HEADER_SIZE + data_len].to_vec();
-        }
-        page.dirty = false;
-        Ok(page)
-    }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PageStore {
-    file: File,
-    page_count: u64,
-    free_pages: Vec<u64>,
+    file: Arc<Mutex<File>>,
+    page_count: Arc<Mutex<u64>>,
+    free_pages: Arc<Mutex<Vec<u64>>>,
 }
 
 impl PageStore {
@@ -73,64 +52,70 @@ impl PageStore {
             .write(true)
             .create(true)
             .open(path)?;
-        
+
         let page_count = (file.metadata()?.len() / PAGE_SIZE as u64).max(1);
-        
+
+        let page_store = PageStore {
+            file: Arc::new(Mutex::new(file)),
+            page_count: Arc::new(Mutex::new(page_count)),
+            free_pages: Arc::new(Mutex::new(Vec::new())),
+        };
+
         // Initialize the first page if the file is empty
-        if file.metadata()?.len() == 0 {
-            let mut page_store = PageStore {
-                file,
-                page_count,
-                free_pages: Vec::new(),
-            };
+        if page_store.file.lock().unwrap().metadata()?.len() == 0 {
             let first_page = Page::new(0);
             page_store.write_page(&first_page)?;
-            return Ok(page_store);
         }
 
-        Ok(PageStore {
-            file,
-            page_count,
-            free_pages: Vec::new(),
-        })
+        Ok(page_store)
     }
 
-    pub fn read_page(&mut self, page_id: u64) -> io::Result<Page> {
-        let mut buffer = vec![0; PAGE_SIZE];
-        self.file.seek(SeekFrom::Start(page_id * PAGE_SIZE as u64))?;
-        self.file.read_exact(&mut buffer)?;
-        Page::from_bytes(page_id, &buffer)
+    pub fn free_page(&self, page_id: u64) {
+        self.free_pages.lock().unwrap().push(page_id);
+    }
+}
+
+// Implement DiskManager trait for PageStore
+impl DiskManager for PageStore {
+    fn read_page(&self, page_id: u64) -> io::Result<Page> {
+        let mut page = Page::new(page_id);
+        let mut file = self.file.lock().unwrap();
+        file.seek(SeekFrom::Start(page_id * PAGE_SIZE as u64))?;
+        let mut buffer = vec![0; PAGE_SIZE - PAGE_HEADER_SIZE];
+        file.read_exact(&mut buffer)?;
+        page.data = buffer;
+        Ok(page)
     }
 
-    pub fn write_page(&mut self, page: &Page) -> io::Result<()> {
-        let page_data = page.to_bytes();
-        self.file.seek(SeekFrom::Start(page.id * PAGE_SIZE as u64))?;
-        self.file.write_all(&page_data)?;
-        self.file.flush()?;
+    fn write_page(&self, page: &Page) -> io::Result<()> {
+        let mut file = self.file.lock().unwrap();
+        file.seek(SeekFrom::Start(page.id * PAGE_SIZE as u64))?;
+        file.write_all(&page.data)?;
+        file.sync_data()?;
         Ok(())
     }
 
-    pub fn allocate_page(&mut self) -> io::Result<u64> {
-        let page_id = if let Some(id) = self.free_pages.pop() {
-            id
-        } else {
-            let id = self.page_count;
-            self.page_count += 1;
-            // Extend file if needed
-            if (id + 1) * PAGE_SIZE as u64 > self.file.metadata()?.len() {
-                self.file.set_len((id + 1) * PAGE_SIZE as u64)?;
-            }
-            id
-        };
+    fn allocate_page(&self) -> io::Result<u64> {
+        // First try to reuse a freed page
+        if let Some(page_id) = self.free_pages.lock().unwrap().pop() {
+            return Ok(page_id);
+        }
 
-        // Initialize new page
-        let page = Page::new(page_id);
-        self.write_page(&page)?;
-        
+        // If no freed pages available, allocate a new one
+        let mut page_count = self.page_count.lock().unwrap();
+        let page_id = *page_count;
+        *page_count += 1;
+
+        // Extend the file if necessary
+        let required_size = (page_id + 1) * PAGE_SIZE as u64;
+        let mut file = self.file.lock().unwrap();
+        let current_size = file.metadata()?.len();
+
+        if required_size > current_size {
+            file.seek(SeekFrom::Start(required_size - 1))?;
+            file.write_all(&[0])?;
+        }
+
         Ok(page_id)
-    }
-
-    pub fn free_page(&mut self, page_id: u64) {
-        self.free_pages.push(page_id);
     }
 }

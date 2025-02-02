@@ -1,22 +1,26 @@
+use page::PageStore;
 use serde::de::{MapAccess, Visitor};
 use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::json;
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fmt::{self, Formatter};
-use std::fs::{File, OpenOptions};
+use std::fs::{create_dir_all, File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::Path;
-use std::sync::{Arc, RwLock};
-use sha2::{Sha256, Digest};
-use std::collections::HashMap;
+use std::sync::{Arc, Mutex, RwLock, RwLockWriteGuard};
 use std::time::Duration;
 
+mod buffer;
 mod page;
-use page::{Page, PageStore};
+mod tests;
+
+use buffer::{BufferPool, DiskManager};
 
 // Add transaction timeout configuration
-const TX_TIMEOUT_SECS: u64 = 30;  // 30 second timeout
+const TX_TIMEOUT_SECS: u64 = 30; // 30 second timeout
 
 // ========== Value and Record ==========
 
@@ -32,7 +36,7 @@ pub enum ValueType {
 pub struct Record {
     pub id: u64,
     pub values: Vec<ValueType>,
-    pub version: u64,  // Add version for MVCC
+    pub version: u64,   // Add version for MVCC
     pub timestamp: u64, // Add timestamp for temporal queries
 }
 
@@ -128,7 +132,7 @@ impl Table {
 
 // Define the WriteAheadLog structure
 struct WriteAheadLog {
-    file: std::fs::File,
+    path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,229 +146,278 @@ struct WalEntry {
 
 impl WriteAheadLog {
     fn new(path: &str) -> Self {
-        let file = OpenOptions::new()
+        OpenOptions::new()
             .create(true)
             .append(true)
             .open(path)
             .unwrap();
-        WriteAheadLog { file }
+        WriteAheadLog {
+            path: path.to_string(),
+        }
     }
 
-    fn load_transactions(&self) -> Vec<Transaction> {
-        let file = OpenOptions::new().read(true).open("wal.log").unwrap();
+    fn load_transactions(&self, policy: &RestorePolicy) -> Result<Vec<Transaction>, String> {
+        let file = match File::open(&self.path) {
+            Ok(f) => f,
+            Err(_) => return Ok(Vec::new()),
+        };
+
+        // Early return for Discard policy
+        if *policy == RestorePolicy::Discard {
+            return Ok(Vec::new());
+        }
+
         let reader = BufReader::new(file);
         let mut transactions = Vec::new();
 
         for line in reader.lines() {
-            match line {
-                Ok(line) => {
-                    let log_entry: serde_json::Value = match serde_json::from_str(&line) {
-                        Ok(entry) => entry,
-                        Err(_) => continue, // Skip invalid JSON lines
-                    };
-                    let entry_data = &log_entry["data"];
-                    let status = log_entry["status"].as_str().unwrap_or("pending");
+            if let Ok(line) = line {
+                let entry: serde_json::Value = serde_json::from_str(&line)
+                    .map_err(|e| format!("Failed to parse WAL entry: {}", e))?;
 
-                    // Only process pending transactions
-                    if status != "pending" {
-                        continue;
-                    }
-
-                    let tx_id = log_entry["tx_id"].as_u64().unwrap();
-                    let mut tx = Transaction::new(
-                        tx_id,
-                        IsolationLevel::ReadCommitted,
-                        None,
-                    );
-
-                    // Update transaction data
-                    if let Some(creates) = entry_data["creates"].as_array() {
-                        tx.pending_table_creates = creates.iter()
-                            .filter_map(|v| v.as_str().map(String::from))
-                            .collect();
-                    }
-
-                    if let Some(drops) = entry_data["drops"].as_array() {
-                        tx.pending_table_drops = drops.iter()
-                            .filter_map(|v| v.as_str().map(String::from))
-                            .collect();
-                    }
-
-                    tx.pending_inserts = entry_data["inserts"]
-                        .as_array()
-                        .unwrap_or(&Vec::new())
-                        .iter()
-                        .filter_map(|v| {
-                            serde_json::from_value(v.clone())
-                                .ok()
-                                .map(|(table_name, record): (String, Record)| (table_name, record))
-                        })
-                        .collect();
-
-                    tx.pending_deletes = entry_data["deletes"]
-                        .as_array()
-                        .unwrap_or(&Vec::new())
-                        .iter()
-                        .filter_map(|v| {
-                            serde_json::from_value(v.clone())
-                                .ok()
-                                .map(|(table_name, id, record): (String, u64, Record)| (table_name, id, record))
-                        })
-                        .collect();
-
-                    tx.start_timestamp = entry_data["timestamp"].as_u64().unwrap_or_else(|| {
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs()
-                    });
-
-                    transactions.push(tx);
+                if *policy == RestorePolicy::RecoverPending
+                    && entry["status"].as_str() != Some("pending")
+                {
+                    continue;
                 }
-                Err(e) => {
-                    println!("Error reading WAL entry: {}", e); // Add error logging
-                    continue; // Skip invalid lines
+
+                // Rest of transaction loading logic
+                let mut tx = Transaction::new(
+                    entry["tx_id"].as_u64().unwrap(),
+                    IsolationLevel::Serializable,
+                    None,
+                );
+
+                // Restore table creates
+                if let Some(creates) = entry["table_creates"].as_array() {
+                    tx.pending_table_creates = creates
+                        .iter()
+                        .map(|v| v.as_str().unwrap().to_string())
+                        .collect();
                 }
+
+                // Restore table drops
+                if let Some(drops) = entry["table_drops"].as_array() {
+                    tx.pending_table_drops = drops
+                        .iter()
+                        .map(|v| v.as_str().unwrap().to_string())
+                        .collect();
+                }
+
+                // Restore inserts
+                if let Some(inserts) = entry["inserts"].as_array() {
+                    for insert in inserts {
+                        let table = insert[0].as_str().unwrap();
+                        let record: Record = serde_json::from_value(insert[1].clone()).unwrap();
+                        tx.pending_inserts.push((table.to_string(), record));
+                    }
+                }
+
+                // Restore deletes
+                if let Some(deletes) = entry["deletes"].as_array() {
+                    for delete in deletes {
+                        let table = delete[0].as_str().unwrap();
+                        let id = delete[1].as_u64().unwrap();
+                        let record: Record = serde_json::from_value(delete[2].clone()).unwrap();
+                        tx.pending_deletes.push((table.to_string(), id, record));
+                    }
+                }
+
+                // Add to write set
+                for (table_name, record) in &tx.pending_inserts {
+                    tx.write_set.push((table_name.clone(), record.id));
+                }
+                for (table_name, id, _) in &tx.pending_deletes {
+                    tx.write_set.push((table_name.clone(), *id));
+                }
+
+                transactions.push(tx);
             }
         }
 
-        transactions
+        println!(
+            "Loaded {} transactions according to {:?} policy:",
+            transactions.len(),
+            policy
+        );
+        for tx in &transactions {
+            println!(
+                "  TX {}: {} creates, {} drops, {} inserts, {} deletes",
+                tx.id,
+                tx.pending_table_creates.len(),
+                tx.pending_table_drops.len(),
+                tx.pending_inserts.len(),
+                tx.pending_deletes.len()
+            );
+        }
+        Ok(transactions)
     }
 
-    fn log_transaction_with_checksum(&mut self, tx: &Transaction, checksum: u64) -> Result<u64, String> {
-        let data = bincode::serialize(tx)
-            .map_err(|e| format!("Failed to serialize transaction: {}", e))?;
+    fn calculate_entry_checksum(entry: &serde_json::Value) -> u64 {
+        // Create a copy without the checksum and status fields
+        let mut entry = entry.as_object().unwrap().clone();
+        entry.remove("checksum");
+        entry.remove("status");
 
-        let entry = WalEntry {
-            tx_id: tx.id,
-            timestamp: std::time::SystemTime::now()
+        // Sort the keys to ensure consistent ordering
+        let mut sorted_entry = serde_json::Map::new();
+        let mut keys: Vec<_> = entry.keys().collect();
+        keys.sort();
+
+        for key in keys {
+            sorted_entry.insert(key.clone(), entry[key].clone());
+        }
+
+        // Calculate checksum from the sorted, filtered entry
+        let mut hasher = Sha256::new();
+        hasher.update(
+            serde_json::Value::Object(sorted_entry)
+                .to_string()
+                .as_bytes(),
+        );
+        u64::from_be_bytes(hasher.finalize()[..8].try_into().unwrap())
+    }
+
+    fn log_transaction(&mut self, tx: &Transaction) -> Result<u64, String> {
+        // Create initial entry
+        let entry = json!({
+            "tx_id": tx.id,
+            "timestamp": std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_secs(),
-            checksum,
-            data,
-            status: "pending".to_string(),
-        };
+            "table_creates": &tx.pending_table_creates,
+            "table_drops": &tx.pending_table_drops,
+            "inserts": &tx.pending_inserts,
+            "deletes": &tx.pending_deletes,
+            "status": "pending"
+        });
 
+        // Calculate checksum
+        let computed_checksum = Self::calculate_entry_checksum(&entry);
+
+        // Add checksum to entry
+        let mut entry = entry.as_object().unwrap().clone();
+        entry.insert("checksum".to_string(), json!(computed_checksum));
+        let entry = serde_json::Value::Object(entry);
+
+        // Write to WAL
         let entry_str = serde_json::to_string(&entry)
             .map_err(|e| format!("Failed to serialize WAL entry to JSON: {}", e))?;
 
-        // Ensure the file is opened in append mode
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
-            .open("wal.log")
+            .open(&self.path)
             .map_err(|e| format!("Failed to open WAL for appending: {}", e))?;
 
-        writeln!(file, "{}", entry_str)
-            .map_err(|e| format!("Failed to write WAL entry: {}", e))?;
-        
+        writeln!(file, "{}", entry_str).map_err(|e| format!("Failed to write WAL entry: {}", e))?;
+
         file.flush()
             .map_err(|e| format!("Failed to flush WAL: {}", e))?;
 
-        Ok(checksum)
+        Ok(computed_checksum)
     }
 
     fn mark_transaction_complete(&mut self, tx_id: u64) -> Result<(), String> {
-        let file = File::open("wal.log").map_err(|e| format!("Failed to open WAL: {}", e))?;
+        let file = File::open(&self.path).map_err(|e| format!("Failed to open WAL: {}", e))?;
         let reader = BufReader::new(file);
-        let mut content = String::new();
+        let mut content = Vec::new();
+        let mut found = false;
 
+        // Read all entries, modifying the status of the matching transaction
         for line in reader.lines() {
-            match line {
-                Ok(line) => {
-                    let mut entry: serde_json::Value = match serde_json::from_str(&line) {
-                        Ok(entry) => entry,
-                        Err(_) => continue, // Skip invalid JSON lines
-                    };
+            if let Ok(line) = line {
+                let mut entry: serde_json::Value = serde_json::from_str(&line)
+                    .map_err(|e| format!("Failed to parse WAL entry: {}", e))?;
 
-                    if entry["tx_id"].as_u64() == Some(tx_id) {
-                        entry["status"] = json!("completed");
-                    }
-                    content.push_str(&serde_json::to_string(&entry).unwrap());
-                    content.push('\n');
+                if entry["tx_id"].as_u64() == Some(tx_id) {
+                    // println!("Marking transaction {} as completed", tx_id);
+                    entry["status"] = json!("completed");
+                    found = true;
                 }
-                Err(_) => continue, // Skip invalid lines
+                content.push(entry);
             }
         }
 
+        if !found {
+            return Err(format!("Transaction {} not found in WAL", tx_id));
+        }
+
+        // Write all entries back to the file
         let file = OpenOptions::new()
             .write(true)
             .truncate(true)
-            .open("wal.log")
+            .open(&self.path)
             .map_err(|e| format!("Failed to open WAL for writing: {}", e))?;
-        
+
         let mut writer = BufWriter::new(file);
-        writer.write_all(content.as_bytes())
-            .map_err(|e| format!("Failed to write WAL: {}", e))?;
-        writer.flush()
+        for entry in content {
+            writeln!(writer, "{}", entry.to_string())
+                .map_err(|e| format!("Failed to write WAL entry: {}", e))?;
+        }
+        writer
+            .flush()
             .map_err(|e| format!("Failed to flush WAL: {}", e))?;
-        
+
         Ok(())
     }
 
     fn is_transaction_valid(&self, tx: &Transaction) -> Result<bool, String> {
-        let mut file = File::open("wal.log")
-            .map_err(|e| format!("Failed to open WAL: {}", e))?;
-        
-        let mut content = Vec::new();
-        file.read_to_end(&mut content)
-            .map_err(|e| format!("Failed to read WAL: {}", e))?;
+        let file = File::open(&self.path).map_err(|e| format!("Failed to open WAL: {}", e))?;
 
-        if let Ok(entry) = bincode::deserialize::<WalEntry>(&content) {
-            if entry.tx_id == tx.id {
-                let mut hasher = Sha256::new();
-                hasher.update(&entry.data);
-                let computed_checksum = u64::from_be_bytes(hasher.finalize()[..8].try_into().unwrap());
-                return Ok(entry.checksum == computed_checksum);
+        let reader = BufReader::new(file);
+
+        for line in reader.lines() {
+            if let Ok(line) = line {
+                let entry: serde_json::Value = serde_json::from_str(&line)
+                    .map_err(|e| format!("Failed to parse WAL entry: {}", e))?;
+
+                if entry["tx_id"].as_u64() == Some(tx.id) {
+                    let stored_checksum = entry["checksum"]
+                        .as_u64()
+                        .ok_or_else(|| "Invalid checksum in WAL entry".to_string())?;
+
+                    let computed_checksum = Self::calculate_entry_checksum(&entry);
+
+                    return Ok(computed_checksum == stored_checksum);
+                }
             }
         }
 
         Ok(false)
     }
 
-    fn get_incomplete_transactions(&self) -> Result<Vec<Transaction>, String> {
-        let file = File::open("wal.log")
-            .map_err(|e| format!("Failed to open WAL: {}", e))?;
-        
-        let mut transactions = Vec::new();
-        let mut reader = BufReader::new(file);
-        
-        let mut content = Vec::new();
-        reader.read_to_end(&mut content)
-            .map_err(|e| format!("Failed to read WAL: {}", e))?;
-
-        if let Ok(entry) = bincode::deserialize::<WalEntry>(&content) {
-            if entry.status == "pending" {
-                if let Ok(tx) = bincode::deserialize(&entry.data) {
-                    transactions.push(tx);
-                }
-            }
-        }
-
-        Ok(transactions)
-    }
-
     fn sync(&self) -> Result<(), String> {
-        self.file.sync_all()
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+            .map_err(|e| format!("Failed to open WAL for writing: {}", e))?;
+
+        file.sync_all()
             .map_err(|e| format!("Failed to sync WAL: {}", e))
     }
 
     fn rotate_log(&mut self) -> Result<(), String> {
-        let backup_path = format!("wal.log.{}", std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs());
+        let backup_path = format!(
+            "{}.{}",
+            &self.path,
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+        );
 
         // Create backup with timestamp
-        std::fs::rename("wal.log", &backup_path)
+        std::fs::rename(&self.path, &backup_path)
             .map_err(|e| format!("Failed to create WAL backup: {}", e))?;
 
         // Create new log file
-        self.file = OpenOptions::new()
+        OpenOptions::new()
             .create(true)
             .append(true)
-            .open("wal.log")
+            .open(&self.path)
             .map_err(|e| format!("Failed to create new WAL: {}", e))?;
 
         // Keep backup for recovery if needed
@@ -373,11 +426,13 @@ impl WriteAheadLog {
 
     fn cleanup_completed_transactions(&mut self) -> Result<(), String> {
         let mut content = String::new();
-        let file = File::open("wal.log").map_err(|e| format!("Failed to open WAL: {}", e))?;
-        BufReader::new(file).read_to_string(&mut content)
+        let file = File::open(&self.path).map_err(|e| format!("Failed to open WAL: {}", e))?;
+        BufReader::new(file)
+            .read_to_string(&mut content)
             .map_err(|e| format!("Failed to read WAL: {}", e))?;
 
-        let completed_count = content.lines()
+        let completed_count = content
+            .lines()
             .filter(|line| {
                 let entry: serde_json::Value = serde_json::from_str(line).unwrap();
                 entry["status"].as_str() == Some("completed")
@@ -385,11 +440,17 @@ impl WriteAheadLog {
             .count();
 
         // If we have too many completed transactions, rotate the log
-        if completed_count > 1000 {
+        if completed_count > 100 {
             self.rotate_log()?;
-            
+
             // Write only pending transactions to new log
-            let mut writer = BufWriter::new(&mut self.file);
+            let mut file = OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.path)
+                .map_err(|e| format!("Failed to open new WAL: {}", e))?;
+
+            let mut writer = BufWriter::new(&mut file);
             for line in content.lines() {
                 let entry: serde_json::Value = serde_json::from_str(line).unwrap();
                 if entry["status"].as_str() == Some("pending") {
@@ -397,7 +458,8 @@ impl WriteAheadLog {
                         .map_err(|e| format!("Failed to write to new WAL: {}", e))?;
                 }
             }
-            writer.flush()
+            writer
+                .flush()
                 .map_err(|e| format!("Failed to flush WAL: {}", e))?;
         }
 
@@ -462,8 +524,8 @@ pub struct Transaction {
     isolation_level: IsolationLevel,
     pending_inserts: Vec<(String, Record)>,
     pending_deletes: Vec<(String, u64, Record)>,
-    read_set: Vec<(String, u64, u64)>,  // (table, record_id, version)
-    write_set: Vec<(String, u64)>,      // (table, record_id)
+    read_set: Vec<(String, u64, u64)>, // (table, record_id, version)
+    write_set: Vec<(String, u64)>,     // (table, record_id)
     snapshot: Option<Database>,
     start_timestamp: u64,
     pending_table_creates: Vec<String>,
@@ -505,7 +567,8 @@ impl TransactionManager {
     }
 
     fn start_transaction(&mut self, tx_id: u64) {
-        self.active_transactions.insert(tx_id, std::time::SystemTime::now());
+        self.active_transactions
+            .insert(tx_id, std::time::SystemTime::now());
     }
 
     fn end_transaction(&mut self, tx_id: u64) {
@@ -543,10 +606,14 @@ impl TransactionManager {
     }
 
     fn cleanup_expired_transactions(&mut self) {
-        let expired: Vec<_> = self.active_transactions
+        let expired: Vec<_> = self
+            .active_transactions
             .iter()
             .filter(|(_, &start_time)| {
-                start_time.elapsed().map(|e| e > Duration::from_secs(TX_TIMEOUT_SECS)).unwrap_or(true)
+                start_time
+                    .elapsed()
+                    .map(|e| e > Duration::from_secs(TX_TIMEOUT_SECS))
+                    .unwrap_or(true)
             })
             .map(|(&tx_id, _)| tx_id)
             .collect();
@@ -568,6 +635,18 @@ pub struct DBEngine {
     tx_manager: TransactionManager,
     // The page store
     page_store: PageStore,
+    // The buffer pool
+    buffer_pool: Arc<Mutex<BufferPool>>,
+    // The restore policy for the WAL
+    restore_policy: RestorePolicy,
+}
+
+// Add a restore policy enum
+#[derive(Debug, PartialEq)]
+pub enum RestorePolicy {
+    RecoverPending,
+    RecoverAll,
+    Discard,
 }
 
 // Add a CommitGuard to ensure proper cleanup
@@ -610,7 +689,12 @@ impl<'a> Drop for CommitGuard<'a> {
 }
 
 impl DBEngine {
-    pub fn new(db_type: DatabaseType, file_path: String) -> Self {
+    pub fn new(
+        db_type: DatabaseType,
+        restore_policy: RestorePolicy,
+        file_path: &str,
+        wal_path: &str,
+    ) -> Self {
         let db = Database {
             db_type,
             tables: BTreeMap::new(),
@@ -618,10 +702,12 @@ impl DBEngine {
 
         let mut engine = DBEngine {
             db: Arc::new(RwLock::new(db)),
-            file_path: file_path.clone(),
-            wal: WriteAheadLog::new("wal.log"),
+            file_path: file_path.to_string(),
+            wal: WriteAheadLog::new(wal_path),
             tx_manager: TransactionManager::new(),
             page_store: PageStore::new(&format!("{}.pages", file_path)).unwrap(),
+            buffer_pool: Arc::new(Mutex::new(BufferPool::new(1000))),
+            restore_policy,
         };
 
         // First try to recover from any previous crash
@@ -632,12 +718,6 @@ impl DBEngine {
         // Then load from disk (this will give us the latest committed state)
         engine.load_from_disk();
 
-        // Finally apply any pending WAL transactions
-        let transactions = engine.wal.load_transactions();
-        for tx in transactions {
-            engine.commit(tx).expect("Failed to recover transactions");
-        }
-
         engine
     }
 
@@ -646,23 +726,23 @@ impl DBEngine {
     pub fn begin_transaction(&mut self, isolation_level: IsolationLevel) -> Transaction {
         let tx_id = rand::random::<u64>();
         self.tx_manager.start_transaction(tx_id);
-        
+
         let snapshot = match isolation_level {
             IsolationLevel::RepeatableRead | IsolationLevel::Serializable => {
                 Some(self.db.read().unwrap().clone())
             }
             _ => None,
         };
-        
+
         Transaction::new(tx_id, isolation_level, snapshot)
     }
 
     fn validate_transaction(&self, tx: &Transaction) -> Result<(), String> {
         let db_read = self.db.read().unwrap();
-        
+
         match tx.isolation_level {
             IsolationLevel::ReadUncommitted => Ok(()), // No validation needed
-            
+
             IsolationLevel::ReadCommitted => {
                 // Ensure no writes have occurred to records we've read since we last read them
                 for (table_name, record_id, version) in &tx.read_set {
@@ -677,7 +757,7 @@ impl DBEngine {
                 }
                 Ok(())
             }
-            
+
             IsolationLevel::RepeatableRead => {
                 // Ensure no modifications to our read set
                 if !self.validate_repeatable_read(&tx, &db_read) {
@@ -685,7 +765,7 @@ impl DBEngine {
                 }
                 Ok(())
             }
-            
+
             IsolationLevel::Serializable => {
                 // Check both read and write sets against all concurrent transactions
                 if !self.validate_serializable(&tx, &db_read) {
@@ -728,7 +808,7 @@ impl DBEngine {
         // 1. All repeatable read conditions are met
         // 2. No phantom reads are possible (check write set against snapshot)
         // 3. No write-write conflicts
-        
+
         // First, check repeatable read conditions
         if !self.validate_repeatable_read(tx, current_db) {
             return false;
@@ -751,14 +831,14 @@ impl DBEngine {
         if let Some(snapshot) = &tx.snapshot {
             for (table_name, table) in &current_db.tables {
                 let snapshot_table = snapshot.tables.get(table_name);
-                
+
                 // If this table exists in our snapshot
                 if let Some(snap_table) = snapshot_table {
                     // Check if any records were added or removed
                     if table.data.len() != snap_table.data.len() {
                         return false;
                     }
-                    
+
                     // Check if any records in our read set were modified
                     for (id, record) in &table.data {
                         if let Some(snap_record) = snap_table.data.get(id) {
@@ -811,6 +891,16 @@ impl DBEngine {
         }
 
         let result = (|| {
+            // Add table existence validation
+            {
+                let db_read = self.db.read().unwrap();
+                for (table_name, _) in &tx.pending_inserts {
+                    if !db_read.tables.contains_key(table_name) {
+                        return Err(format!("Table '{}' does not exist", table_name));
+                    }
+                }
+            }
+
             self.validate_transaction(&tx)?;
 
             let mut db_lock = self.db.write().unwrap();
@@ -819,14 +909,14 @@ impl DBEngine {
                 .unwrap()
                 .as_secs();
 
-            // Apply changes first
+            // Now pass ownership of the lock guard
             self.apply_transaction_changes(&mut db_lock, &tx, current_timestamp)?;
-            
+
             // Calculate checksum after changes
             let checksum = self.calculate_checksum(&db_lock)?;
 
             // Log to WAL using bincode
-            self.wal.log_transaction_with_checksum(&tx, checksum)?;
+            self.wal.log_transaction(&tx)?;
             self.wal.sync()?;
 
             // Persist changes if needed
@@ -889,10 +979,12 @@ impl DBEngine {
     fn rollback_failed_commit(&mut self, tx: &Transaction) -> Result<(), String> {
         let result = {
             let mut db_lock = self.db.write().unwrap();
-            
+
             // Restore original state for modified records
             for (table_name, id) in &tx.write_set {
-                if let Some(snapshot_record) = tx.snapshot.as_ref()
+                if let Some(snapshot_record) = tx
+                    .snapshot
+                    .as_ref()
                     .and_then(|s| s.tables.get(table_name))
                     .and_then(|t| t.get_record(id))
                 {
@@ -915,19 +1007,44 @@ impl DBEngine {
 
     fn apply_transaction_changes(
         &self,
-        db_lock: &mut Database,
+        db_lock: &mut RwLockWriteGuard<'_, Database>,
         tx: &Transaction,
-        timestamp: u64
+        timestamp: u64,
     ) -> Result<(), String> {
-        // Apply DDL operations
-        for table_name in &tx.pending_table_creates {
-            db_lock.tables.entry(table_name.clone()).or_insert(Table::new());
-        }
+        // Track pages to be freed
+        let mut pages_to_free = Vec::new();
+
+        // Handle table drops first
         for table_name in &tx.pending_table_drops {
+            if let Some(table_locations) = self.get_table_page_ids(table_name) {
+                pages_to_free.extend(table_locations);
+            }
             db_lock.tables.remove(table_name);
         }
 
-        // Apply DML operations
+        // Handle deletes
+        for (table_name, id, _) in &tx.pending_deletes {
+            if let Some(tbl) = db_lock.tables.get_mut(table_name) {
+                if let Some(page_id) = self.get_record_page_id(table_name, *id) {
+                    pages_to_free.push(page_id);
+                }
+                tbl.delete_record(id);
+            }
+        }
+
+        // Free the collected pages
+        for page_id in pages_to_free {
+            self.page_store.free_page(page_id);
+        }
+
+        // Handle remaining changes
+        for table_name in &tx.pending_table_creates {
+            db_lock
+                .tables
+                .entry(table_name.clone())
+                .or_insert(Table::new());
+        }
+
         for (table_name, mut record) in tx.pending_inserts.clone() {
             record.version += 1;
             record.timestamp = timestamp;
@@ -935,13 +1052,33 @@ impl DBEngine {
             tbl.insert_record(record);
         }
 
-        for (table_name, id, _) in &tx.pending_deletes {
-            if let Some(tbl) = db_lock.tables.get_mut(table_name) {
-                tbl.delete_record(id);
+        Ok(())
+    }
+
+    fn get_table_page_ids(&self, table_name: &str) -> Option<Vec<u64>> {
+        let mut buffer_pool = self.buffer_pool.lock().unwrap();
+        let toc_frame = buffer_pool.get_page(0, &self.page_store);
+        let toc = toc_frame.get_page().read().unwrap(); // Updated this line
+        let table_locations: HashMap<String, Vec<u64>> =
+            bincode::deserialize(&toc.data).unwrap_or_default();
+        table_locations.get(table_name).cloned()
+    }
+
+    // Helper method to get page ID for a record
+    fn get_record_page_id(&self, table_name: &str, record_id: u64) -> Option<u64> {
+        if let Some(page_ids) = self.get_table_page_ids(table_name) {
+            let mut buffer_pool = self.buffer_pool.lock().unwrap();
+            for page_id in page_ids {
+                let frame = buffer_pool.get_page(page_id, &self.page_store);
+                let page_data = frame.get_page().read().unwrap(); // Updated this line
+                let records: Vec<Record> =
+                    bincode::deserialize(&page_data.data).unwrap_or_default();
+                if records.iter().any(|r| r.id == record_id) {
+                    return Some(page_id);
+                }
             }
         }
-
-        Ok(())
+        None
     }
 
     fn get_record(&self, tx: &mut Transaction, table_name: &str, id: u64) -> Option<Record> {
@@ -953,26 +1090,28 @@ impl DBEngine {
         // First check if this record is in our write set
         if tx.write_set.contains(&(table_name.to_string(), id)) {
             // Check pending inserts first
-            if let Some((_, record)) = tx.pending_inserts.iter()
-                .find(|(t, r)| t == table_name && r.id == id) {
+            if let Some((_, record)) = tx
+                .pending_inserts
+                .iter()
+                .find(|(t, r)| t == table_name && r.id == id)
+            {
                 return Some(record.clone());
             }
             // If not in pending inserts, it might be deleted
-            if tx.pending_deletes.iter()
-                .any(|(t, rid, _)| t == table_name && *rid == id) {
+            if tx
+                .pending_deletes
+                .iter()
+                .any(|(t, rid, _)| t == table_name && *rid == id)
+            {
                 return None;
             }
         }
 
         let db_lock = self.db.read().unwrap();
-        
+
         let record = match tx.isolation_level {
-            IsolationLevel::ReadUncommitted => {
-                self.get_latest_record(&db_lock, table_name, id)
-            },
-            IsolationLevel::ReadCommitted => {
-                self.get_committed_record(&db_lock, table_name, id)
-            },
+            IsolationLevel::ReadUncommitted => self.get_latest_record(&db_lock, table_name, id),
+            IsolationLevel::ReadCommitted => self.get_committed_record(&db_lock, table_name, id),
             IsolationLevel::RepeatableRead | IsolationLevel::Serializable => {
                 if let Some(snapshot) = &tx.snapshot {
                     self.get_snapshot_record(snapshot, table_name, id)
@@ -993,21 +1132,30 @@ impl DBEngine {
     }
 
     fn get_latest_record(&self, db: &Database, table_name: &str, id: u64) -> Option<Record> {
-        db.tables.get(table_name)
+        db.tables
+            .get(table_name)
             .and_then(|tbl| tbl.get_record(&id))
             .map(|arc| arc.read().unwrap().clone())
     }
 
     fn get_committed_record(&self, db: &Database, table_name: &str, id: u64) -> Option<Record> {
         // Only return records that have been committed (have a timestamp)
-        db.tables.get(table_name)
+        db.tables
+            .get(table_name)
             .and_then(|tbl| tbl.get_record(&id))
             .map(|arc| arc.read().unwrap().clone())
             .filter(|rec| rec.timestamp > 0)
     }
 
-    fn get_snapshot_record(&self, snapshot: &Database, table_name: &str, id: u64) -> Option<Record> {
-        snapshot.tables.get(table_name)
+    fn get_snapshot_record(
+        &self,
+        snapshot: &Database,
+        table_name: &str,
+        id: u64,
+    ) -> Option<Record> {
+        snapshot
+            .tables
+            .get(table_name)
             .and_then(|tbl| tbl.get_record(&id))
             .map(|arc| arc.read().unwrap().clone())
     }
@@ -1025,6 +1173,15 @@ impl DBEngine {
     // ========== Record Operations (within a transaction) ==========
 
     pub fn insert_record(&self, tx: &mut Transaction, table_name: &str, record: Record) {
+        // First check if the table exists
+        let db_lock = self.db.read().unwrap();
+        if !db_lock.tables.contains_key(table_name) {
+            // Add the insert to pending_inserts anyway so that commit will fail
+            tx.pending_inserts.push((table_name.to_string(), record));
+            return;
+        }
+        drop(db_lock);
+
         // Track the write in the transaction's write set
         tx.write_set.push((table_name.to_string(), record.id));
         // Store the insert in the transaction
@@ -1040,15 +1197,21 @@ impl DBEngine {
                 // Track the write in the transaction's write set
                 tx.write_set.push((table_name.to_string(), id));
                 // Store the delete in the transaction
-                tx.pending_deletes.push((table_name.to_string(), id, old_rec.clone()));
+                tx.pending_deletes
+                    .push((table_name.to_string(), id, old_rec.clone()));
             }
         }
     }
 
     // Make search operation transactional
-    pub fn search_records(&self, tx: &mut Transaction, table_name: &str, query: &str) -> Vec<Record> {
+    pub fn search_records(
+        &self,
+        tx: &mut Transaction,
+        table_name: &str,
+        query: &str,
+    ) -> Vec<Record> {
         let db_lock = self.db.read().unwrap();
-        
+
         match tx.isolation_level {
             IsolationLevel::ReadUncommitted => self.search_latest(&db_lock, table_name, query),
             IsolationLevel::ReadCommitted => self.search_committed(&db_lock, table_name, query),
@@ -1065,7 +1228,8 @@ impl DBEngine {
     // Helper methods for search
     fn search_latest(&self, db: &Database, table_name: &str, query: &str) -> Vec<Record> {
         if let Some(table) = db.tables.get(table_name) {
-            table.search_by_string(query)
+            table
+                .search_by_string(query)
                 .into_iter()
                 .map(|arc| arc.read().unwrap().clone())
                 .collect()
@@ -1076,7 +1240,8 @@ impl DBEngine {
 
     fn search_committed(&self, db: &Database, table_name: &str, query: &str) -> Vec<Record> {
         if let Some(table) = db.tables.get(table_name) {
-            table.search_by_string(query)
+            table
+                .search_by_string(query)
                 .into_iter()
                 .filter_map(|arc| {
                     let record = arc.read().unwrap();
@@ -1094,7 +1259,8 @@ impl DBEngine {
 
     fn search_snapshot(&self, snapshot: &Database, table_name: &str, query: &str) -> Vec<Record> {
         if let Some(table) = snapshot.tables.get(table_name) {
-            table.search_by_string(query)
+            table
+                .search_by_string(query)
                 .into_iter()
                 .map(|arc| arc.read().unwrap().clone())
                 .collect()
@@ -1110,41 +1276,96 @@ impl DBEngine {
             return;
         }
 
-        // Read metadata from first page
-        if let Ok(page) = self.page_store.read_page(0) {
-            if let Ok(db) = bincode::deserialize(&page.data) {
-                let mut db_lock = self.db.write().unwrap();
-                *db_lock = db;
+        let mut buffer_pool = self.buffer_pool.lock().unwrap();
+        let mut db_lock = self.db.write().unwrap();
+
+        // Read TOC
+        let toc_frame = buffer_pool.get_page(0, &self.page_store);
+        let table_locations: HashMap<String, Vec<u64>> = {
+            let toc = toc_frame.get_page().read().unwrap();
+            bincode::deserialize(&toc.data).unwrap_or_default()
+        };
+        buffer_pool.unpin_page(0, false);
+
+        // Load each table
+        for (table_name, page_ids) in table_locations {
+            let mut table = Table::new();
+
+            for page_id in page_ids {
+                let frame = buffer_pool.get_page(page_id, &self.page_store);
+                let records: Vec<Record> = {
+                    let page = frame.get_page().read().unwrap();
+                    bincode::deserialize(&page.data).unwrap_or_default()
+                };
+
+                for record in records {
+                    table.insert_record(record);
+                }
+
+                buffer_pool.unpin_page(page_id, false);
             }
+
+            db_lock.tables.insert(table_name, table);
         }
     }
 
     fn save_to_disk(&mut self) -> Result<u64, String> {
         let db_lock = self.db.read().unwrap();
-        
-        // Serialize database state
-        let data = bincode::serialize(&*db_lock)
-            .map_err(|e| format!("Failed to serialize DB: {}", e))?;
-        
-        // Allocate a new page for the database state
-        let page_id = self.page_store.allocate_page()
-            .map_err(|e| format!("Failed to allocate page: {}", e))?;
-        
-        // Write to newly allocated page
-        let mut meta_page = Page::new(page_id);
-        meta_page.write_data(0, &data)
-            .map_err(|e| format!("Failed to write data: {}", e))?;
-        self.page_store.write_page(&meta_page)
-            .map_err(|e| format!("Failed to write page: {}", e))?;
-        
-        // Free the old page if it exists
-        if page_id > 0 {
-            self.page_store.free_page(page_id - 1);
+        let mut buffer_pool = self.buffer_pool.lock().unwrap();
+        let mut table_locations = HashMap::new();
+
+        // Reduce chunk size to fit within page size
+        let chunk_size = 50; // Reduced from 100
+
+        for (table_name, table) in &db_lock.tables {
+            let mut page_ids = Vec::new();
+            let records: Vec<Record> = table
+                .data
+                .values()
+                .map(|r| r.read().unwrap().clone())
+                .collect();
+
+            // Process chunks with smaller size
+            for chunk in records.chunks(chunk_size) {
+                let page_id = self
+                    .page_store
+                    .allocate_page()
+                    .map_err(|e| format!("Failed to allocate page: {}", e))?;
+
+                let frame = buffer_pool.get_page(page_id, &self.page_store);
+                {
+                    let serialized = bincode::serialize(chunk)
+                        .map_err(|e| format!("Failed to serialize records: {}", e))?;
+
+                    let mut page = frame.get_page().write().unwrap();
+                    page.write_data(0, &serialized)
+                        .map_err(|e| format!("Failed to write data: {}", e))?;
+                }
+
+                page_ids.push(page_id);
+                buffer_pool.unpin_page(page_id, true);
+            }
+
+            if !page_ids.is_empty() {
+                table_locations.insert(table_name.clone(), page_ids);
+            }
         }
-        
-        // Calculate checksum
+
+        // Write table of contents
+        let toc_frame = buffer_pool.get_page(0, &self.page_store);
+        {
+            let serialized = bincode::serialize(&table_locations)
+                .map_err(|e| format!("Failed to serialize TOC: {}", e))?;
+
+            let mut toc = toc_frame.get_page().write().unwrap();
+            toc.write_data(0, &serialized)
+                .map_err(|e| format!("Failed to write TOC: {}", e))?;
+        }
+
+        buffer_pool.unpin_page(0, true);
+        buffer_pool.flush_all(&self.page_store);
+
         let checksum = self.calculate_checksum(&*db_lock)?;
-        
         Ok(checksum)
     }
 
@@ -1163,16 +1384,48 @@ impl DBEngine {
 
     // Add recovery handling
     fn recover_from_crash(&mut self) -> Result<(), String> {
-        // 1. Load database from disk
+        // Load database from disk first
         self.load_from_disk();
-        
-        // 2. Get incomplete transactions from WAL
-        let incomplete_txs = self.wal.get_incomplete_transactions()?;
-        
-        // 3. Either roll forward or back based on transaction state
-        for tx in incomplete_txs {
+
+        // Now using the consolidated load_transactions method
+        let transactions = self.wal.load_transactions(&self.restore_policy)?;
+
+        // Rest of the recovery process remains the same
+        // Apply each valid transaction
+        for tx in transactions {
             if self.wal.is_transaction_valid(&tx)? {
-                self.commit(tx)?;
+                // println!("Recovering transaction {}", tx.id);
+
+                // First handle table creations
+                if !tx.pending_table_creates.is_empty() {
+                    let mut db_lock = self.db.write().unwrap();
+                    for table_name in &tx.pending_table_creates {
+                        db_lock
+                            .tables
+                            .entry(table_name.clone())
+                            .or_insert_with(Table::new);
+                    }
+                }
+
+                // Then handle the records
+                let mut db_lock = self.db.write().unwrap();
+                let timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+
+                self.apply_transaction_changes(&mut db_lock, &tx, timestamp)?;
+
+                // Save changes to disk immediately
+                drop(db_lock);
+                self.save_to_disk()?;
+
+                // Mark as complete only after successful save
+                self.wal.mark_transaction_complete(tx.id)?;
+
+                println!("Successfully recovered transaction {}", tx.id);
+            } else {
+                println!("Skipping invalid transaction {}", tx.id);
             }
         }
 
@@ -1185,107 +1438,428 @@ impl DBEngine {
     }
 
     fn calculate_checksum(&self, data: &Database) -> Result<u64, String> {
-        let serialized = bincode::serialize(data)
-            .map_err(|e| format!("Failed to serialize DB: {}", e))?;
+        let serialized =
+            bincode::serialize(data).map_err(|e| format!("Failed to serialize DB: {}", e))?;
         let mut hasher = Sha256::new();
         hasher.update(&serialized);
-        Ok(u64::from_be_bytes(hasher.finalize()[..8].try_into().unwrap()))
+        Ok(u64::from_be_bytes(
+            hasher.finalize()[..8].try_into().unwrap(),
+        ))
     }
 }
 
 // ========== Test / Example Usage ==========
 
 fn main() {
-    // Create an OnDisk database
-    let engine_ondisk = DBEngine::new(DatabaseType::OnDisk, "users_ondisk_db.json".to_string());
-    // Or create a Hybrid database
-    let _engine_hybrid = DBEngine::new(DatabaseType::Hybrid, "users_hybrid_db.json".to_string());
-
-    // We'll just demonstrate with the OnDisk for clarity
+    create_dir_all("data").unwrap();
+    let engine_ondisk = DBEngine::new(
+        DatabaseType::OnDisk,
+        RestorePolicy::RecoverPending,
+        "data/test_db",
+        "data/wal.log",
+    );
     let mut engine = engine_ondisk;
-
     let isolation_level = IsolationLevel::Serializable;
 
-    // 1) Create table (if not exist)
+    println!("\n🚀 Initializing Database...");
+    // Create data directory
+
+    // Create tables
     let mut tx = engine.begin_transaction(isolation_level);
     engine.create_table(&mut tx, "users");
+    engine.create_table(&mut tx, "animals");
     engine.commit(tx).unwrap();
+    println!("✅ Tables created successfully");
 
-    // 2) Begin a transaction with READ_COMMITTED isolation
+    // Insert users with more properties
+    let mut tx = engine.begin_transaction(isolation_level);
+    let users = vec![
+        (
+            1,
+            "Alice",
+            30,
+            "Senior Developer",
+            95000.0,
+            true,
+            "Engineering",
+            "Remote",
+        ),
+        (
+            2,
+            "Bob",
+            25,
+            "UI Designer",
+            75000.0,
+            false,
+            "Design",
+            "Office",
+        ),
+        (
+            3,
+            "Charlie",
+            35,
+            "Product Manager",
+            120000.0,
+            true,
+            "Management",
+            "Hybrid",
+        ),
+        (
+            4,
+            "Diana",
+            28,
+            "Data Scientist",
+            98000.0,
+            true,
+            "Analytics",
+            "Remote",
+        ),
+        (
+            5,
+            "Eve",
+            32,
+            "DevOps Engineer",
+            105000.0,
+            true,
+            "Infrastructure",
+            "Remote",
+        ),
+        (6, "Frank", 41, "CTO", 180000.0, true, "Executive", "Office"),
+        (
+            7,
+            "Grace",
+            27,
+            "QA Engineer",
+            72000.0,
+            false,
+            "Quality",
+            "Hybrid",
+        ),
+        (
+            8,
+            "Henry",
+            38,
+            "Solutions Architect",
+            125000.0,
+            true,
+            "Engineering",
+            "Remote",
+        ),
+    ];
+
+    for (id, name, age, role, salary, senior, department, work_mode) in users {
+        let record = Record {
+            id,
+            values: vec![
+                ValueType::Str(name.to_string()),
+                ValueType::Int(age),
+                ValueType::Str(role.to_string()),
+                ValueType::Float(salary),
+                ValueType::Bool(senior),
+                ValueType::Str(department.to_string()),
+                ValueType::Str(work_mode.to_string()),
+            ],
+            version: 0,
+            timestamp: 0,
+        };
+        engine.insert_record(&mut tx, "users", record);
+    }
+    engine.commit(tx).unwrap();
+    println!("✅ Users data inserted");
+
+    // Insert diverse animals
+    let mut tx = engine.begin_transaction(isolation_level);
+    let animals = vec![
+        // Dogs
+        (
+            1,
+            "Max",
+            "Dog",
+            5,
+            15.5,
+            true,
+            "Golden Retriever",
+            "Friendly",
+            "Medium",
+            true,
+            "USA",
+        ),
+        (
+            2,
+            "Luna",
+            "Dog",
+            3,
+            30.2,
+            true,
+            "German Shepherd",
+            "Protective",
+            "Large",
+            false,
+            "Germany",
+        ),
+        (
+            3,
+            "Rocky",
+            "Dog",
+            2,
+            8.5,
+            true,
+            "French Bulldog",
+            "Playful",
+            "Small",
+            true,
+            "France",
+        ),
+        // Cats
+        (
+            4, "Bella", "Cat", 1, 3.8, true, "Persian", "Lazy", "Medium", true, "Iran",
+        ),
+        (
+            5,
+            "Oliver",
+            "Cat",
+            4,
+            4.2,
+            true,
+            "Maine Coon",
+            "Independent",
+            "Large",
+            false,
+            "USA",
+        ),
+        (
+            6, "Lucy", "Cat", 2, 3.5, false, "Siamese", "Active", "Small", true, "Thailand",
+        ),
+        // Exotic Pets
+        (
+            7,
+            "Ziggy",
+            "Parrot",
+            15,
+            0.4,
+            true,
+            "African Grey",
+            "Talkative",
+            "Medium",
+            false,
+            "Congo",
+        ),
+        (
+            8,
+            "Monty",
+            "Snake",
+            3,
+            2.0,
+            false,
+            "Ball Python",
+            "Calm",
+            "Medium",
+            true,
+            "Africa",
+        ),
+        (
+            9,
+            "Spike",
+            "Lizard",
+            2,
+            0.3,
+            true,
+            "Bearded Dragon",
+            "Friendly",
+            "Small",
+            true,
+            "Australia",
+        ),
+        // Farm Animals
+        (
+            10, "Thunder", "Horse", 8, 450.0, true, "Arabian", "Spirited", "Large", false, "Arabia",
+        ),
+        (
+            11,
+            "Wooley",
+            "Sheep",
+            3,
+            80.0,
+            true,
+            "Merino",
+            "Gentle",
+            "Medium",
+            true,
+            "Australia",
+        ),
+        (
+            12,
+            "Einstein",
+            "Pig",
+            1,
+            120.0,
+            true,
+            "Vietnamese Pot-Belly",
+            "Smart",
+            "Medium",
+            true,
+            "Vietnam",
+        ),
+    ];
+
+    for (
+        id,
+        name,
+        species,
+        age,
+        weight,
+        vaccinated,
+        breed,
+        temperament,
+        size,
+        house_trained,
+        origin,
+    ) in animals
+    {
+        let record = Record {
+            id,
+            values: vec![
+                ValueType::Str(name.to_string()),
+                ValueType::Str(species.to_string()),
+                ValueType::Int(age),
+                ValueType::Float(weight),
+                ValueType::Bool(vaccinated),
+                ValueType::Str(breed.to_string()),
+                ValueType::Str(temperament.to_string()),
+                ValueType::Str(size.to_string()),
+                ValueType::Bool(house_trained),
+                ValueType::Str(origin.to_string()),
+            ],
+            version: 0,
+            timestamp: 0,
+        };
+        engine.insert_record(&mut tx, "animals", record);
+    }
+    engine.commit(tx).unwrap();
+    println!("✅ Animals data inserted");
+
+    // Advanced Queries
+    println!("\n🔍 Running Queries...");
+
     let mut tx = engine.begin_transaction(isolation_level);
 
-    // 3) Insert some records
-    let record1 = Record {
-        id: 1,
-        values: vec![ValueType::Str("Alice".to_string()), ValueType::Int(30)],
-        version: 0,
-        timestamp: 0,
-    };
-    engine.insert_record(&mut tx, "users", record1);
+    // User queries
+    println!("\n👥 User Statistics:");
+    let remote_workers = engine.search_records(&mut tx, "users", "Remote");
+    println!("Remote Workers: {}", remote_workers.len());
 
-    let record2 = Record {
-        id: 2,
-        values: vec![ValueType::Str("Bob".to_string()), ValueType::Int(25)],
-        version: 0,
-        timestamp: 0,
-    };
-    engine.insert_record(&mut tx, "users", record2);
+    let senior_staff = engine.search_records(&mut tx, "users", "Senior");
+    println!("Senior Staff Members: {}", senior_staff.len());
 
-    // 4) Commit
-    engine.commit(tx).unwrap();
-
-    // 5) Perform some reads
-    let mut read_tx = engine.begin_transaction(isolation_level);
-    if let Some(rec) = engine.get_record(&mut read_tx, "users", 1) {
-        println!("Got record for user id=1: {:?}", rec);
+    // Animal queries
+    println!("\n🐾 Animal Statistics:");
+    for species in [
+        "Dog", "Cat", "Parrot", "Snake", "Lizard", "Horse", "Sheep", "Pig",
+    ] {
+        let animals = engine.search_records(&mut tx, "animals", species);
+        println!("{} count: {}", species, animals.len());
     }
 
-    let results = engine.search_records(&mut read_tx, "users", "Ali");
-    println!("Searching for 'Ali' in 'users' table -> {:?}", results);
+    // Test complex updates
+    println!("\n✏️ Testing Updates...");
+    let mut tx = engine.begin_transaction(isolation_level);
 
-    // 6) Demonstrate deleting a record
-    let mut tx2 = engine.begin_transaction(isolation_level);
-    engine.delete_record(&mut tx2, "users", 2);
-    engine.commit(tx2).unwrap();
-
-    // Check if user with id=2 is gone
-    let mut read_tx2 = engine.begin_transaction(isolation_level);
-    let after_delete = engine.get_record(&mut read_tx2, "users", 2);
-    println!("After deletion, user id=2: {:?}", after_delete);
-
-    // 7) Test rollback functionality
-    let mut tx3 = engine.begin_transaction(isolation_level);
-    let record3 = Record {
-        id: 3,
-        values: vec![ValueType::Str("Charlie".to_string()), ValueType::Int(40)],
-        version: 0,
-        timestamp: 0,
-    };
-    engine.insert_record(&mut tx3, "users", record3);
-    // Implicit rollback since commit is not called
-    
-    // Explicitly rollback the transaction
-    // engine.rollback(tx3);
-
-    // Check if user with id=3 is not present
-    let mut read_tx3 = engine.begin_transaction(isolation_level);
-    let after_rollback = engine.get_record(&mut read_tx3, "users", 3);
-    println!("After implicit rollback, user id=3: {:?}", after_rollback);
-
-    // 8) Test atomicity by attempting to insert and delete in the same transaction
-    let mut tx4 = engine.begin_transaction(isolation_level);
-    let record4 = Record {
+    // Promote an employee
+    engine.delete_record(&mut tx, "users", 4);
+    let promoted_user = Record {
         id: 4,
-        values: vec![ValueType::Str("Dave".to_string()), ValueType::Int(35)],
+        values: vec![
+            ValueType::Str("Diana".to_string()),
+            ValueType::Int(29),
+            ValueType::Str("Lead Data Scientist".to_string()),
+            ValueType::Float(120000.0),
+            ValueType::Bool(true),
+            ValueType::Str("Analytics".to_string()),
+            ValueType::Str("Hybrid".to_string()),
+        ],
         version: 0,
         timestamp: 0,
     };
-    engine.insert_record(&mut tx4, "users", record4);
-    engine.delete_record(&mut tx4, "users", 4);
-    engine.commit(tx4).unwrap();
+    engine.insert_record(&mut tx, "users", promoted_user);
 
-    // Check if user with id=4 is not present
-    let mut read_tx4 = engine.begin_transaction(isolation_level);
-    let after_atomic = engine.get_record(&mut read_tx4, "users", 4);
-    println!("After atomic operation, user id=4: {:?}", after_atomic);
+    // Update animal training status
+    engine.delete_record(&mut tx, "animals", 6);
+    let trained_cat = Record {
+        id: 6,
+        values: vec![
+            ValueType::Str("Lucy".to_string()),
+            ValueType::Str("Cat".to_string()),
+            ValueType::Int(2),
+            ValueType::Float(3.5),
+            ValueType::Bool(true),
+            ValueType::Str("Siamese".to_string()),
+            ValueType::Str("Well-behaved".to_string()),
+            ValueType::Str("Small".to_string()),
+            ValueType::Bool(true),
+            ValueType::Str("Thailand".to_string()),
+        ],
+        version: 0,
+        timestamp: 0,
+    };
+    engine.insert_record(&mut tx, "animals", trained_cat);
+    engine.commit(tx).unwrap();
+    println!("✅ Updates completed successfully");
+
+    // Final State Display
+    println!("\n📊 Final Database State:");
+    let mut final_tx = engine.begin_transaction(isolation_level);
+
+    println!("\n👥 Users:");
+    for id in 1..=8 {
+        if let Some(user) = engine.get_record(&mut final_tx, "users", id) {
+            println!(
+                "ID {}: {} - {} ({})",
+                id,
+                match &user.values[0] {
+                    ValueType::Str(s) => s,
+                    _ => "?",
+                },
+                match &user.values[2] {
+                    ValueType::Str(s) => s,
+                    _ => "?",
+                },
+                match &user.values[5] {
+                    ValueType::Str(s) => s,
+                    _ => "?",
+                }
+            );
+        }
+    }
+
+    println!("\n🐾 Animals:");
+    for id in 1..=12 {
+        if let Some(animal) = engine.get_record(&mut final_tx, "animals", id) {
+            println!(
+                "ID {}: {} - {} {} ({}, {})",
+                id,
+                match &animal.values[0] {
+                    ValueType::Str(s) => s,
+                    _ => "?",
+                },
+                match &animal.values[5] {
+                    ValueType::Str(s) => s,
+                    _ => "?",
+                },
+                match &animal.values[1] {
+                    ValueType::Str(s) => s,
+                    _ => "?",
+                },
+                match &animal.values[6] {
+                    ValueType::Str(s) => s,
+                    _ => "?",
+                },
+                match &animal.values[9] {
+                    ValueType::Str(s) => s,
+                    _ => "?",
+                }
+            );
+        }
+    }
+
+    println!("\n✨ Database operations completed successfully!");
 }

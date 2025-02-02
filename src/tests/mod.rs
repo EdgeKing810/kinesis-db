@@ -1,0 +1,78 @@
+#![allow(dead_code)]
+
+use crate::{DBEngine, DatabaseType, Record, RestorePolicy, ValueType};
+use std::fs;
+use std::path::PathBuf;
+
+mod basic_operations;
+mod error_cases;
+mod isolation_levels;
+mod performance;
+mod wal_operations;
+
+// Helper to create a unique test directory
+fn get_test_dir() -> PathBuf {
+    let data_dir = PathBuf::from("data");
+    fs::create_dir_all(&data_dir).unwrap();
+
+    let test_dir = PathBuf::from("data/tests");
+    fs::create_dir_all(&test_dir).unwrap();
+    test_dir
+}
+
+// Helper to get unique file paths for a test
+fn get_test_files(test_id: &str) -> (PathBuf, PathBuf) {
+    let test_dir = get_test_dir();
+    let db_path = test_dir.join(format!("test_db_{}.pages", test_id));
+    let wal_path = test_dir.join(format!("test_wal_{}.log", test_id));
+    (db_path, wal_path)
+}
+
+// Add cleanup helper
+fn cleanup_test_files(db_path: &PathBuf, wal_path: &PathBuf) {
+    let _ = std::fs::remove_file(db_path);
+    let _ = std::fs::remove_file(format!("{}.pages", db_path.to_str().unwrap()));
+    let _ = std::fs::remove_file(wal_path);
+}
+
+// Setup function now takes paths as parameters
+pub fn setup_test_db_with_paths(
+    db_path: PathBuf,
+    wal_path: PathBuf,
+    restore_policy: RestorePolicy,
+    cleanup: bool,
+) -> DBEngine {
+    if cleanup {
+        cleanup_test_files(&db_path, &wal_path);
+    }
+
+    DBEngine::new(
+        DatabaseType::OnDisk,
+        restore_policy,
+        db_path.to_str().unwrap(),
+        wal_path.to_str().unwrap(),
+    )
+}
+
+pub fn setup_test_db(test_id: &str) -> DBEngine {
+    let (db_path, wal_path) = get_test_files(test_id);
+    setup_test_db_with_paths(db_path, wal_path, RestorePolicy::RecoverPending, true)
+}
+
+pub fn setup_test_db_wal(test_id: &str) -> DBEngine {
+    let (db_path, wal_path) = get_test_files(test_id);
+    setup_test_db_with_paths(db_path, wal_path, RestorePolicy::RecoverAll, false)
+}
+
+pub fn create_test_record(id: u64, name: &str) -> Record {
+    Record {
+        id,
+        values: vec![
+            ValueType::Str(name.to_string()),
+            ValueType::Int(30),
+            ValueType::Bool(true),
+        ],
+        version: 0,
+        timestamp: 0,
+    }
+}
