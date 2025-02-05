@@ -20,11 +20,25 @@ mod tests;
 use buffer::{BufferPool, DiskManager};
 
 // Add transaction timeout configuration
-const TX_TIMEOUT_SECS: u64 = 30; // 30 second timeout
+pub struct TransactionConfig {
+    timeout_secs: u64,
+    max_retries: u32,
+    deadlock_detection_interval_ms: u64,
+}
+
+impl Default for TransactionConfig {
+    fn default() -> Self {
+        TransactionConfig {
+            timeout_secs: 30,
+            max_retries: 3,
+            deadlock_detection_interval_ms: 100,
+        }
+    }
+}
 
 // ========== Value and Record ==========
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ValueType {
     Int(i64),
     Float(f64),
@@ -557,14 +571,16 @@ struct TransactionManager {
     active_transactions: HashMap<u64, (std::time::SystemTime, Transaction)>,
     locks: HashMap<(String, u64), u64>, // (table, id) -> tx_id
     wait_for_graph: HashMap<u64, HashSet<u64>>, // Changed Vec to HashSet
+    config: TransactionConfig,
 }
 
 impl TransactionManager {
-    fn new() -> Self {
+    fn new(config: Option<TransactionConfig>) -> Self {
         TransactionManager {
             active_transactions: HashMap::new(),
             locks: HashMap::new(),
-            wait_for_graph: HashMap::new()
+            wait_for_graph: HashMap::new(),
+            config: config.unwrap_or_default()
         }
     }
 
@@ -617,6 +633,27 @@ impl TransactionManager {
         true
     }
 
+    fn acquire_lock_with_retry(&mut self, tx_id: u64, table_name: &str, record_id: u64) -> bool {
+        let mut retries = 0;
+        while retries < self.config.max_retries {
+            if self.acquire_lock(tx_id, table_name, record_id) {
+                return true;
+            }
+            
+            // Check for deadlock
+            if self.has_deadlock(tx_id) {
+                return false;
+            }
+            
+            // Wait before retrying
+            std::thread::sleep(Duration::from_millis(
+                self.config.deadlock_detection_interval_ms
+            ));
+            retries += 1;
+        }
+        false
+    }
+
     fn release_lock(&mut self, tx_id: u64, table_name: &str, record_id: u64) {
         let key = (table_name.to_string(), record_id);
         
@@ -638,7 +675,7 @@ impl TransactionManager {
     fn is_transaction_expired(&self, tx_id: u64) -> bool {
         if let Some((start_time, _)) = self.active_transactions.get(&tx_id) {
             if let Ok(elapsed) = start_time.elapsed() {
-                return elapsed > Duration::from_secs(TX_TIMEOUT_SECS);
+                return elapsed > Duration::from_secs(self.config.timeout_secs);
             }
         }
         false
@@ -651,7 +688,7 @@ impl TransactionManager {
             .filter(|(_, &(start_time, _))| {
                 start_time
                     .elapsed()
-                    .map(|e| e > Duration::from_secs(TX_TIMEOUT_SECS))
+                    .map(|e| e > Duration::from_secs(self.config.timeout_secs))
                     .unwrap_or(true)
             })
             .map(|(&tx_id, _)| tx_id)
@@ -766,6 +803,7 @@ impl DBEngine {
         restore_policy: RestorePolicy,
         file_path: &str,
         wal_path: &str,
+        tx_config: Option<TransactionConfig>
     ) -> Self {
         let db = Database {
             db_type,
@@ -776,7 +814,7 @@ impl DBEngine {
             db: Arc::new(RwLock::new(db)),
             file_path: file_path.to_string(),
             wal: WriteAheadLog::new(wal_path),
-            tx_manager: TransactionManager::new(),
+            tx_manager: TransactionManager::new(tx_config),
             page_store: PageStore::new(&format!("{}.pages", file_path)).unwrap(),
             buffer_pool: Arc::new(Mutex::new(BufferPool::new(1000))),
             restore_policy,
@@ -956,7 +994,7 @@ impl DBEngine {
 
         // Acquire locks for all writes
         for (table_name, id) in &tx.write_set {
-            if !self.tx_manager.acquire_lock(tx.id, table_name, *id) {
+            if !self.tx_manager.acquire_lock_with_retry(tx.id, table_name, *id) {
                 self.tx_manager.end_transaction(tx.id);
                 return Err("Failed to acquire lock".to_string());
             }
@@ -1034,6 +1072,7 @@ impl DBEngine {
                     }
                 }
             }
+
             Ok(())
         };
 
@@ -1211,6 +1250,12 @@ impl DBEngine {
         tx.pending_table_drops.push(table_name.to_string());
     }
 
+    pub fn get_tables(&self) -> Vec<String> {
+        let db_lock: std::sync::RwLockReadGuard<'_, Database> = self.db.read().unwrap();
+        let tables = db_lock.tables.clone();
+        tables.keys().cloned().collect()
+    }
+
     // ========== Record Operations (within a transaction) ==========
 
     pub fn insert_record(&self, tx: &mut Transaction, table_name: &str, record: Record) {
@@ -1231,16 +1276,17 @@ impl DBEngine {
 
     pub fn delete_record(&mut self, tx: &mut Transaction, table_name: &str, id: u64) {
         // First try to acquire the lock
-        if !self.tx_manager.acquire_lock(tx.id, table_name, id) {
+        if !self.tx_manager.acquire_lock_with_retry(tx.id, table_name, id) {
             // If we can't acquire the lock, check for deadlock
             if self.tx_manager.has_deadlock(tx.id) {
                 // If there's a deadlock, mark the transaction as failed
                 tx.write_set.push((table_name.to_string(), id));  // Add to write set so commit will fail
                 return;
             }
+
             // Wait for lock (in real system this would be async)
             std::thread::sleep(std::time::Duration::from_millis(10));
-            if !self.tx_manager.acquire_lock(tx.id, table_name, id) {
+            if !self.tx_manager.acquire_lock_with_retry(tx.id, table_name, id) {
                 return; // Give up if still can't acquire lock
             }
         }
@@ -1506,11 +1552,18 @@ impl DBEngine {
 
 fn main() {
     create_dir_all("data").unwrap();
+    let tx_config = TransactionConfig {
+        timeout_secs: 60,          // 1 minute timeout
+        max_retries: 5,            // More retries
+        deadlock_detection_interval_ms: 50, // Faster detection
+    };
+
     let engine_ondisk = DBEngine::new(
         DatabaseType::OnDisk,
         RestorePolicy::RecoverPending,
         "data/test_db",
         "data/wal.log",
+        Some(tx_config)
     );
     let mut engine = engine_ondisk;
     let isolation_level = IsolationLevel::Serializable;

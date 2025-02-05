@@ -56,7 +56,7 @@ impl BufferPool {
         }
 
         if self.frames.len() >= self.max_size {
-            self.evict_page(disk_manager);
+            self.evict_page_lru(disk_manager);
         }
 
         let page = disk_manager.read_page(page_id).unwrap();
@@ -71,7 +71,7 @@ impl BufferPool {
         frame
     }
 
-    fn evict_page(&mut self, disk_manager: &impl DiskManager) {
+    fn evict_page_lru(&mut self, disk_manager: &impl DiskManager) {
         if let Some((page_id, frame)) = self.find_unpinned_page() {
             if frame.is_dirty() {
                 let page = frame.read_page();
@@ -84,7 +84,8 @@ impl BufferPool {
     fn find_unpinned_page(&self) -> Option<(u64, Arc<BufferFrame>)> {
         self.frames
             .iter()
-            .find(|(_, frame)| frame.get_pin_count() == 0)
+            .filter(|(_, frame)| frame.get_pin_count() == 0)
+            .min_by_key(|(_, frame)| *frame.last_used.lock().unwrap())
             .map(|(&id, frame)| (id, frame.clone()))
     }
 
