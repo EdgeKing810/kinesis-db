@@ -4,7 +4,7 @@ use serde::ser::SerializeMap;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::collections::HashMap;
 use std::fmt::{self, Formatter};
 use std::fs::{create_dir_all, File, OpenOptions};
@@ -554,8 +554,9 @@ impl Transaction {
 
 // Add a transaction manager to handle concurrent transactions
 struct TransactionManager {
-    active_transactions: HashMap<u64, std::time::SystemTime>,
+    active_transactions: HashMap<u64, (std::time::SystemTime, Transaction)>,
     locks: HashMap<(String, u64), u64>, // (table, id) -> tx_id
+    wait_for_graph: HashMap<u64, HashSet<u64>>, // Changed Vec to HashSet
 }
 
 impl TransactionManager {
@@ -563,41 +564,79 @@ impl TransactionManager {
         TransactionManager {
             active_transactions: HashMap::new(),
             locks: HashMap::new(),
+            wait_for_graph: HashMap::new()
         }
     }
 
     fn start_transaction(&mut self, tx_id: u64) {
         self.active_transactions
-            .insert(tx_id, std::time::SystemTime::now());
+            .insert(tx_id, (std::time::SystemTime::now(), Transaction::new(tx_id, IsolationLevel::Serializable, None)));
     }
 
     fn end_transaction(&mut self, tx_id: u64) {
+        // Remove all locks held by this transaction
+        self.locks.retain(|_, &mut holding_tx| holding_tx != tx_id);
+        
+        // Remove from active transactions
         self.active_transactions.remove(&tx_id);
-        self.locks.retain(|_, &mut lock_tx| lock_tx != tx_id);
-    }
-
-    fn acquire_lock(&mut self, tx_id: u64, table: &str, record_id: u64) -> bool {
-        let key = (table.to_string(), record_id);
-        match self.locks.get(&key) {
-            Some(&lock_holder) if lock_holder != tx_id => false,
-            _ => {
-                self.locks.insert(key, tx_id);
-                true
-            }
+        
+        // Remove from wait-for graph
+        self.wait_for_graph.remove(&tx_id);
+        
+        // Remove edges pointing to this transaction
+        for edges in self.wait_for_graph.values_mut() {
+            edges.remove(&tx_id);
         }
     }
 
-    fn release_lock(&mut self, tx_id: u64, table: &str, record_id: u64) {
-        let key = (table.to_string(), record_id);
-        if let Some(&lock_holder) = self.locks.get(&key) {
-            if lock_holder == tx_id {
+    fn acquire_lock(&mut self, tx_id: u64, table_name: &str, record_id: u64) -> bool {
+        let key = (table_name.to_string(), record_id);
+
+        if let Some(&holding_tx) = self.locks.get(&key) {
+            // If we already hold this lock, return true
+            if holding_tx == tx_id {
+                return true;
+            }
+
+            // If lock is held by another transaction
+            // Check for deadlock immediately
+            if self.has_deadlock(tx_id) {
+                return false;
+            } else {
+                // Add edge to wait-for graph
+                self.wait_for_graph
+                .entry(tx_id)
+                .or_insert_with(HashSet::new)
+                .insert(holding_tx);
+            }
+            return false;
+        }
+
+        // If we get here, we can acquire the lock
+        self.locks.insert(key, tx_id);
+        true
+    }
+
+    fn release_lock(&mut self, tx_id: u64, table_name: &str, record_id: u64) {
+        let key = (table_name.to_string(), record_id);
+        
+        if let Some(&holding_tx) = self.locks.get(&key) {
+            if holding_tx == tx_id {
                 self.locks.remove(&key);
+                
+                // Remove this transaction from the wait-for graph
+                self.wait_for_graph.remove(&tx_id);
+                
+                // Remove edges pointing to this transaction
+                for edges in self.wait_for_graph.values_mut() {
+                    edges.remove(&tx_id);
+                }
             }
         }
     }
 
     fn is_transaction_expired(&self, tx_id: u64) -> bool {
-        if let Some(start_time) = self.active_transactions.get(&tx_id) {
+        if let Some((start_time, _)) = self.active_transactions.get(&tx_id) {
             if let Ok(elapsed) = start_time.elapsed() {
                 return elapsed > Duration::from_secs(TX_TIMEOUT_SECS);
             }
@@ -609,7 +648,7 @@ impl TransactionManager {
         let expired: Vec<_> = self
             .active_transactions
             .iter()
-            .filter(|(_, &start_time)| {
+            .filter(|(_, &(start_time, _))| {
                 start_time
                     .elapsed()
                     .map(|e| e > Duration::from_secs(TX_TIMEOUT_SECS))
@@ -621,6 +660,39 @@ impl TransactionManager {
         for tx_id in expired {
             self.end_transaction(tx_id);
         }
+    }
+
+    fn has_deadlock(&self, tx_id: u64) -> bool {
+        let mut visited = HashSet::new();
+        let mut path = HashSet::new();
+        
+        fn detect_cycle(
+            graph: &HashMap<u64, HashSet<u64>>,
+            current: u64,
+            visited: &mut HashSet<u64>,
+            path: &mut HashSet<u64>,
+        ) -> bool {
+            if !visited.contains(&current) {
+                visited.insert(current);
+                path.insert(current);
+
+                if let Some(neighbors) = graph.get(&current) {
+                    for &next in neighbors {
+                        if !visited.contains(&next) {
+                            if detect_cycle(graph, next, visited, path) {
+                                return true;
+                            }
+                        } else if path.contains(&next) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            path.remove(&current);
+            false
+        }
+
+        detect_cycle(&self.wait_for_graph, tx_id, &mut visited, &mut path)
     }
 }
 
@@ -877,7 +949,7 @@ impl DBEngine {
         self.tx_manager.cleanup_expired_transactions();
 
         // Check for deadlocks before proceeding
-        if self.has_deadlock(&tx) {
+        if self.tx_manager.has_deadlock(tx.id) {
             self.tx_manager.end_transaction(tx.id);
             return Err("Deadlock detected".to_string());
         }
@@ -943,37 +1015,6 @@ impl DBEngine {
         self.tx_manager.end_transaction(tx.id);
 
         result
-    }
-
-    // Add deadlock detection
-    fn has_deadlock(&self, tx: &Transaction) -> bool {
-        let mut visited = std::collections::HashSet::new();
-        let mut stack = vec![tx.id];
-
-        while let Some(current_id) = stack.pop() {
-            if !visited.insert(current_id) {
-                return true; // Cycle detected
-            }
-
-            // Check if any resources this transaction wants are held by others
-            // This is a simplified version - in practice you'd need to track
-            // actual resource locks and waiting relationships
-            for (table_name, id) in &tx.write_set {
-                if let Ok(db) = self.db.read() {
-                    if let Some(table) = db.tables.get(table_name) {
-                        if let Some(record) = table.get_record(id) {
-                            let record = record.read().unwrap();
-                            if record.timestamp > tx.start_timestamp {
-                                // Resource is held by a newer transaction
-                                stack.push(record.timestamp);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        false
     }
 
     fn rollback_failed_commit(&mut self, tx: &Transaction) -> Result<(), String> {
@@ -1188,17 +1229,30 @@ impl DBEngine {
         tx.pending_inserts.push((table_name.to_string(), record));
     }
 
-    pub fn delete_record(&self, tx: &mut Transaction, table_name: &str, id: u64) {
+    pub fn delete_record(&mut self, tx: &mut Transaction, table_name: &str, id: u64) {
+        // First try to acquire the lock
+        if !self.tx_manager.acquire_lock(tx.id, table_name, id) {
+            // If we can't acquire the lock, check for deadlock
+            if self.tx_manager.has_deadlock(tx.id) {
+                // If there's a deadlock, mark the transaction as failed
+                tx.write_set.push((table_name.to_string(), id));  // Add to write set so commit will fail
+                return;
+            }
+            // Wait for lock (in real system this would be async)
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            if !self.tx_manager.acquire_lock(tx.id, table_name, id) {
+                return; // Give up if still can't acquire lock
+            }
+        }
+
         let db_lock = self.db.read().unwrap();
-        let tbl_opt = db_lock.tables.get(table_name);
-        if let Some(tbl) = tbl_opt {
+        if let Some(tbl) = db_lock.tables.get(table_name) {
             if let Some(old_rec_arc) = tbl.get_record(&id) {
                 let old_rec = old_rec_arc.read().unwrap();
                 // Track the write in the transaction's write set
                 tx.write_set.push((table_name.to_string(), id));
                 // Store the delete in the transaction
-                tx.pending_deletes
-                    .push((table_name.to_string(), id, old_rec.clone()));
+                tx.pending_deletes.push((table_name.to_string(), id, old_rec.clone()));
             }
         }
     }
