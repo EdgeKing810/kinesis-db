@@ -1,7 +1,8 @@
-use crate::buffer::DiskManager;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::sync::{Arc, Mutex};
+
+use super::buffer::DiskManager;
 
 pub const PAGE_SIZE: usize = 16384; // 16KB pages
 const PAGE_HEADER_SIZE: usize = 16;

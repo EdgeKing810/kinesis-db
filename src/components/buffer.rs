@@ -1,7 +1,8 @@
-use crate::page::Page;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Instant;
+
+use super::page::Page;
 
 #[derive(Debug)]
 pub struct BufferFrame {
