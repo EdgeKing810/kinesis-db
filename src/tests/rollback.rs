@@ -7,7 +7,7 @@ use crate::{
 #[test]
 fn test_rollback_record_operations() {
     let mut engine = setup_test_db("rollback_records");
-    
+
     // Setup initial table
     let mut tx = engine.begin_transaction(IsolationLevel::Serializable);
     engine.create_table(&mut tx, "test_table");

@@ -8,8 +8,8 @@ mod basic_operations;
 mod error_cases;
 mod isolation_levels;
 mod performance;
-mod wal_operations;
 mod rollback;
+mod wal_operations;
 
 // Helper to create a unique test directory
 fn get_test_dir() -> PathBuf {
@@ -52,7 +52,7 @@ pub fn setup_test_db_with_paths(
         restore_policy,
         db_path.to_str().unwrap(),
         wal_path.to_str().unwrap(),
-        None
+        None,
     )
 }
 

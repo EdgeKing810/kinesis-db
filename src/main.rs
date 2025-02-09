@@ -13,8 +13,8 @@ mod tests;
 fn main() {
     create_dir_all("data").unwrap();
     let tx_config = TransactionConfig {
-        timeout_secs: 60,          // 1 minute timeout
-        max_retries: 5,            // More retries
+        timeout_secs: 60,                   // 1 minute timeout
+        max_retries: 5,                     // More retries
         deadlock_detection_interval_ms: 50, // Faster detection
     };
 
@@ -23,7 +23,7 @@ fn main() {
         RestorePolicy::RecoverPending,
         "data/test_db",
         "data/wal.log",
-        Some(tx_config)
+        Some(tx_config),
     );
     let mut engine = engine_ondisk;
     let isolation_level = IsolationLevel::Serializable;

@@ -1,6 +1,14 @@
-use std::{collections::BTreeMap, fmt::{self, Formatter}, sync::{Arc, RwLock}};
+use std::{
+    collections::BTreeMap,
+    fmt::{self, Formatter},
+    sync::{Arc, RwLock},
+};
 
-use serde::{de::{MapAccess, Visitor}, ser::SerializeMap, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{
+    de::{MapAccess, Visitor},
+    ser::SerializeMap,
+    Deserialize, Deserializer, Serialize, Serializer,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ValueType {

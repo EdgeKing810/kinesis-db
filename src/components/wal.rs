@@ -1,10 +1,16 @@
-use std::{fs::{File, OpenOptions}, io::{BufRead, BufReader, BufWriter, Read, Write}};
+use std::{
+    fs::{File, OpenOptions},
+    io::{BufRead, BufReader, BufWriter, Read, Write},
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use crate::components::{database::{restore_policy::RestorePolicy, table::Record}, transaction::isolation_level::IsolationLevel};
+use crate::components::{
+    database::{restore_policy::RestorePolicy, table::Record},
+    transaction::isolation_level::IsolationLevel,
+};
 
 use super::transaction::transaction::Transaction;
 

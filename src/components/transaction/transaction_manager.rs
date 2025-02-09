@@ -1,4 +1,7 @@
-use std::{collections::{HashMap, HashSet}, time::{Duration, SystemTime}};
+use std::{
+    collections::{HashMap, HashSet},
+    time::{Duration, SystemTime},
+};
 
 use super::{config::TransactionConfig, isolation_level::IsolationLevel, transaction::Transaction};
 
@@ -16,25 +19,30 @@ impl TransactionManager {
             active_transactions: HashMap::new(),
             locks: HashMap::new(),
             wait_for_graph: HashMap::new(),
-            config: config.unwrap_or_default()
+            config: config.unwrap_or_default(),
         }
     }
 
     pub fn start_transaction(&mut self, tx_id: u64) {
-        self.active_transactions
-            .insert(tx_id, (std::time::SystemTime::now(), Transaction::new(tx_id, IsolationLevel::Serializable, None)));
+        self.active_transactions.insert(
+            tx_id,
+            (
+                std::time::SystemTime::now(),
+                Transaction::new(tx_id, IsolationLevel::Serializable, None),
+            ),
+        );
     }
 
     pub fn end_transaction(&mut self, tx_id: u64) {
         // Remove all locks held by this transaction
         self.locks.retain(|_, &mut holding_tx| holding_tx != tx_id);
-        
+
         // Remove from active transactions
         self.active_transactions.remove(&tx_id);
-        
+
         // Remove from wait-for graph
         self.wait_for_graph.remove(&tx_id);
-        
+
         // Remove edges pointing to this transaction
         for edges in self.wait_for_graph.values_mut() {
             edges.remove(&tx_id);
@@ -57,9 +65,9 @@ impl TransactionManager {
             } else {
                 // Add edge to wait-for graph
                 self.wait_for_graph
-                .entry(tx_id)
-                .or_insert_with(HashSet::new)
-                .insert(holding_tx);
+                    .entry(tx_id)
+                    .or_insert_with(HashSet::new)
+                    .insert(holding_tx);
             }
             return false;
         }
@@ -69,21 +77,26 @@ impl TransactionManager {
         true
     }
 
-    pub fn acquire_lock_with_retry(&mut self, tx_id: u64, table_name: &str, record_id: u64) -> bool {
+    pub fn acquire_lock_with_retry(
+        &mut self,
+        tx_id: u64,
+        table_name: &str,
+        record_id: u64,
+    ) -> bool {
         let mut retries = 0;
         while retries < self.config.max_retries {
             if self.acquire_lock(tx_id, table_name, record_id) {
                 return true;
             }
-            
+
             // Check for deadlock
             if self.has_deadlock(tx_id) {
                 return false;
             }
-            
+
             // Wait before retrying
             std::thread::sleep(Duration::from_millis(
-                self.config.deadlock_detection_interval_ms
+                self.config.deadlock_detection_interval_ms,
             ));
             retries += 1;
         }
@@ -92,14 +105,14 @@ impl TransactionManager {
 
     pub fn release_lock(&mut self, tx_id: u64, table_name: &str, record_id: u64) {
         let key = (table_name.to_string(), record_id);
-        
+
         if let Some(&holding_tx) = self.locks.get(&key) {
             if holding_tx == tx_id {
                 self.locks.remove(&key);
-                
+
                 // Remove this transaction from the wait-for graph
                 self.wait_for_graph.remove(&tx_id);
-                
+
                 // Remove edges pointing to this transaction
                 for edges in self.wait_for_graph.values_mut() {
                     edges.remove(&tx_id);
@@ -138,7 +151,7 @@ impl TransactionManager {
     pub fn has_deadlock(&self, tx_id: u64) -> bool {
         let mut visited = HashSet::new();
         let mut path = HashSet::new();
-        
+
         fn detect_cycle(
             graph: &HashMap<u64, HashSet<u64>>,
             current: u64,

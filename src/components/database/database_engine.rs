@@ -1,10 +1,28 @@
-use std::{collections::{BTreeMap, HashMap}, path::Path, sync::{Arc, Mutex, RwLock, RwLockWriteGuard}};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::Path,
+    sync::{Arc, Mutex, RwLock, RwLockWriteGuard},
+};
 
 use sha2::{Digest, Sha256};
 
-use crate::components::{buffer::{BufferPool, DiskManager}, commit_guard::CommitGuard, page::PageStore, transaction::{config::TransactionConfig, isolation_level::IsolationLevel, manager::TransactionManager, transaction::Transaction}, wal::WriteAheadLog};
+use crate::components::{
+    buffer::{BufferPool, DiskManager},
+    commit_guard::CommitGuard,
+    page::PageStore,
+    transaction::{
+        config::TransactionConfig, isolation_level::IsolationLevel, manager::TransactionManager,
+        transaction::Transaction,
+    },
+    wal::WriteAheadLog,
+};
 
-use super::{database::Database, db_type::DatabaseType, restore_policy::RestorePolicy, table::{Record, Table}};
+use super::{
+    database::Database,
+    db_type::DatabaseType,
+    restore_policy::RestorePolicy,
+    table::{Record, Table},
+};
 
 pub struct DBEngine {
     // The actual database data (in memory)
@@ -29,7 +47,7 @@ impl DBEngine {
         restore_policy: RestorePolicy,
         file_path: &str,
         wal_path: &str,
-        tx_config: Option<TransactionConfig>
+        tx_config: Option<TransactionConfig>,
     ) -> Self {
         let db = Database {
             db_type,
@@ -220,7 +238,10 @@ impl DBEngine {
 
         // Acquire locks for all writes
         for (table_name, id) in &tx.write_set {
-            if !self.tx_manager.acquire_lock_with_retry(tx.id, table_name, *id) {
+            if !self
+                .tx_manager
+                .acquire_lock_with_retry(tx.id, table_name, *id)
+            {
                 self.tx_manager.end_transaction(tx.id);
                 return Err("Failed to acquire lock".to_string());
             }
@@ -472,10 +493,12 @@ impl DBEngine {
         tx.pending_table_creates.push(table_name.to_string());
     }
 
+    #[allow(dead_code)]
     pub fn drop_table(&self, tx: &mut Transaction, table_name: &str) {
         tx.pending_table_drops.push(table_name.to_string());
     }
 
+    #[allow(dead_code)]
     pub fn get_tables(&self) -> Vec<String> {
         let db_lock: std::sync::RwLockReadGuard<'_, Database> = self.db.read().unwrap();
         let tables = db_lock.tables.clone();
@@ -502,17 +525,23 @@ impl DBEngine {
 
     pub fn delete_record(&mut self, tx: &mut Transaction, table_name: &str, id: u64) {
         // First try to acquire the lock
-        if !self.tx_manager.acquire_lock_with_retry(tx.id, table_name, id) {
+        if !self
+            .tx_manager
+            .acquire_lock_with_retry(tx.id, table_name, id)
+        {
             // If we can't acquire the lock, check for deadlock
             if self.tx_manager.has_deadlock(tx.id) {
                 // If there's a deadlock, mark the transaction as failed
-                tx.write_set.push((table_name.to_string(), id));  // Add to write set so commit will fail
+                tx.write_set.push((table_name.to_string(), id)); // Add to write set so commit will fail
                 return;
             }
 
             // Wait for lock (in real system this would be async)
             std::thread::sleep(std::time::Duration::from_millis(10));
-            if !self.tx_manager.acquire_lock_with_retry(tx.id, table_name, id) {
+            if !self
+                .tx_manager
+                .acquire_lock_with_retry(tx.id, table_name, id)
+            {
                 return; // Give up if still can't acquire lock
             }
         }
@@ -524,7 +553,8 @@ impl DBEngine {
                 // Track the write in the transaction's write set
                 tx.write_set.push((table_name.to_string(), id));
                 // Store the delete in the transaction
-                tx.pending_deletes.push((table_name.to_string(), id, old_rec.clone()));
+                tx.pending_deletes
+                    .push((table_name.to_string(), id, old_rec.clone()));
             }
         }
     }
@@ -758,6 +788,7 @@ impl DBEngine {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn rollback(&mut self, tx: Transaction) -> Result<(), String> {
         self.rollback_failed_commit(&tx)?;
         Ok(())

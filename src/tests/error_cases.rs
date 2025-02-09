@@ -42,7 +42,7 @@ fn test_deadlock_detection() {
 
     // T2 tries to lock record 1 (waits for T1)
     engine.delete_record(&mut tx2, "test_table", 1);
-    
+
     // T1 tries to lock record 2 (creates deadlock)
     engine.delete_record(&mut tx1, "test_table", 2);
 
