@@ -6,12 +6,12 @@ use std::path::PathBuf;
 
 mod basic_operations;
 mod buffer_pool;
+mod database_engine;
 mod error_cases;
 mod isolation_levels;
 mod performance;
 mod rollback;
 mod wal_operations;
-mod database_engine;
 
 // Helper to create a unique test directory
 fn get_test_dir() -> PathBuf {

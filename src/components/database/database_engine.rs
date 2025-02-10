@@ -8,7 +8,8 @@ use sha2::{Digest, Sha256};
 
 use crate::components::{
     storage::{
-        buffer_pool::BufferPool, disk_manager::DiskManager, page::PAGE_SIZE, page_store::PageStore, wal::WriteAheadLog
+        buffer_pool::BufferPool, disk_manager::DiskManager, page::PAGE_SIZE, page_store::PageStore,
+        wal::WriteAheadLog,
     },
     transaction::{
         config::TransactionConfig, isolation_level::IsolationLevel, manager::TransactionManager,
@@ -693,11 +694,12 @@ impl DBEngine {
             for chunk in records.chunks(BATCH_SIZE) {
                 let serialized = bincode::serialize(chunk)
                     .map_err(|e| format!("Failed to serialize records: {}", e))?;
-                
+
                 let mut current_data = serialized;
-                
+
                 while !current_data.is_empty() {
-                    let page_id = self.page_store
+                    let page_id = self
+                        .page_store
                         .allocate_page()
                         .map_err(|e| format!("Failed to allocate page: {}", e))?;
                     page_ids.push(page_id);
@@ -705,7 +707,8 @@ impl DBEngine {
                     let frame = buffer_pool.get_page(page_id, &self.page_store);
                     let remaining = {
                         let mut page = frame.get_page().write().unwrap();
-                        let result = page.write_data(0, &current_data)
+                        let result = page
+                            .write_data(0, &current_data)
                             .map_err(|e| format!("Failed to write data: {}", e))?;
                         buffer_pool.unpin_page(page_id, true);
                         result
