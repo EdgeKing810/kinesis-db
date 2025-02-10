@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use crate::{DBEngine, DatabaseType, Record, RestorePolicy, ValueType};
+use crate::{DBEngine, DatabaseType, IsolationLevel, Record, RestorePolicy, ValueType};
 use std::fs;
 use std::path::PathBuf;
 
@@ -41,6 +41,7 @@ pub fn setup_test_db_with_paths(
     db_path: PathBuf,
     wal_path: PathBuf,
     restore_policy: RestorePolicy,
+    isolation_level: IsolationLevel,
     cleanup: bool,
 ) -> DBEngine {
     if cleanup {
@@ -53,17 +54,30 @@ pub fn setup_test_db_with_paths(
         db_path.to_str().unwrap(),
         wal_path.to_str().unwrap(),
         None,
+        isolation_level,
     )
 }
 
-pub fn setup_test_db(test_id: &str) -> DBEngine {
+pub fn setup_test_db(test_id: &str, isolation_level: IsolationLevel) -> DBEngine {
     let (db_path, wal_path) = get_test_files(test_id);
-    setup_test_db_with_paths(db_path, wal_path, RestorePolicy::RecoverPending, true)
+    setup_test_db_with_paths(
+        db_path,
+        wal_path,
+        RestorePolicy::RecoverPending,
+        isolation_level,
+        true,
+    )
 }
 
-pub fn setup_test_db_wal(test_id: &str) -> DBEngine {
+pub fn setup_test_db_wal(test_id: &str, isolation_level: IsolationLevel) -> DBEngine {
     let (db_path, wal_path) = get_test_files(test_id);
-    setup_test_db_with_paths(db_path, wal_path, RestorePolicy::RecoverAll, false)
+    setup_test_db_with_paths(
+        db_path,
+        wal_path,
+        RestorePolicy::RecoverAll,
+        isolation_level,
+        false,
+    )
 }
 
 pub fn create_test_record(id: u64, name: &str) -> Record {

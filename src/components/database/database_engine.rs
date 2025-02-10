@@ -30,6 +30,7 @@ pub struct DBEngine {
     page_store: PageStore,               // The page store
     buffer_pool: Arc<Mutex<BufferPool>>, // The buffer pool
     restore_policy: RestorePolicy,       // The restore policy for the WAL
+    isolation_level: IsolationLevel,     // The default isolation level
 }
 
 impl DBEngine {
@@ -39,6 +40,7 @@ impl DBEngine {
         file_path: &str,
         wal_path: &str,
         tx_config: Option<TransactionConfig>,
+        isolation_level: IsolationLevel,
     ) -> Self {
         let db = Database {
             db_type,
@@ -53,6 +55,7 @@ impl DBEngine {
             page_store: PageStore::new(&format!("{}.pages", file_path)).unwrap(),
             buffer_pool: Arc::new(Mutex::new(BufferPool::new(1000))),
             restore_policy,
+            isolation_level,
         };
 
         // First try to recover from any previous crash
@@ -68,18 +71,19 @@ impl DBEngine {
 
     // ========== Transaction Management ==========
 
-    pub fn begin_transaction(&mut self, isolation_level: IsolationLevel) -> Transaction {
+    pub fn begin_transaction(&mut self) -> Transaction {
         let tx_id = rand::random::<u64>();
-        self.tx_manager.start_transaction(tx_id);
+        self.tx_manager
+            .start_transaction(self.isolation_level, tx_id);
 
-        let snapshot = match isolation_level {
+        let snapshot = match self.isolation_level {
             IsolationLevel::RepeatableRead | IsolationLevel::Serializable => {
                 Some(self.db.read().unwrap().clone())
             }
             _ => None,
         };
 
-        Transaction::new(tx_id, isolation_level, snapshot)
+        Transaction::new(tx_id, self.isolation_level, snapshot)
     }
 
     fn validate_transaction(&self, tx: &Transaction) -> Result<(), String> {
@@ -754,7 +758,9 @@ impl DBEngine {
         // Load database from disk first
         self.load_from_disk();
 
-        let transactions = self.wal.load_transactions(&self.restore_policy)?;
+        let transactions = self
+            .wal
+            .load_transactions(&self.restore_policy, self.isolation_level)?;
 
         // Apply each valid transaction
         for tx in transactions {

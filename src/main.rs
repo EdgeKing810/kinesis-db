@@ -25,22 +25,22 @@ fn main() {
         "data/test_db",
         "data/wal.log",
         Some(tx_config),
+        IsolationLevel::Serializable,
     );
     let mut engine = engine_ondisk;
-    let isolation_level = IsolationLevel::Serializable;
 
     println!("\n🚀 Initializing Database...");
     // Create data directory
 
     // Create tables
-    let mut tx = engine.begin_transaction(isolation_level);
+    let mut tx = engine.begin_transaction();
     engine.create_table(&mut tx, "users");
     engine.create_table(&mut tx, "animals");
     engine.commit(tx).unwrap();
     println!("✅ Tables created successfully");
 
     // Insert users with more properties
-    let mut tx = engine.begin_transaction(isolation_level);
+    let mut tx = engine.begin_transaction();
     let users = vec![
         (
             1,
@@ -136,7 +136,7 @@ fn main() {
     println!("✅ Users data inserted");
 
     // Insert diverse animals
-    let mut tx = engine.begin_transaction(isolation_level);
+    let mut tx = engine.begin_transaction();
     let animals = vec![
         // Dogs
         (
@@ -309,7 +309,7 @@ fn main() {
     // Advanced Queries
     println!("\n🔍 Running Queries...");
 
-    let mut tx = engine.begin_transaction(isolation_level);
+    let mut tx = engine.begin_transaction();
 
     // User queries
     println!("\n👥 User Statistics:");
@@ -330,7 +330,7 @@ fn main() {
 
     // Test complex updates
     println!("\n✏️ Testing Updates...");
-    let mut tx = engine.begin_transaction(isolation_level);
+    let mut tx = engine.begin_transaction();
 
     // Promote an employee
     engine.delete_record(&mut tx, "users", 4);
@@ -375,7 +375,7 @@ fn main() {
 
     // Final State Display
     println!("\n📊 Final Database State:");
-    let mut final_tx = engine.begin_transaction(isolation_level);
+    let mut final_tx = engine.begin_transaction();
 
     println!("\n👥 Users:");
     for id in 1..=8 {

@@ -38,7 +38,11 @@ impl WriteAheadLog {
         }
     }
 
-    pub fn load_transactions(&self, policy: &RestorePolicy) -> Result<Vec<Transaction>, String> {
+    pub fn load_transactions(
+        &self,
+        policy: &RestorePolicy,
+        isolation_level: IsolationLevel,
+    ) -> Result<Vec<Transaction>, String> {
         // Open the WAL file
         let file = match File::open(&self.path) {
             Ok(f) => f,
@@ -67,11 +71,8 @@ impl WriteAheadLog {
                 }
 
                 // Create a new transaction
-                let mut tx = Transaction::new(
-                    entry["tx_id"].as_u64().unwrap(),
-                    IsolationLevel::Serializable,
-                    None,
-                );
+                let mut tx =
+                    Transaction::new(entry["tx_id"].as_u64().unwrap(), isolation_level, None);
 
                 // Restore table drops
                 if let Some(drops) = entry["table_drops"].as_array() {

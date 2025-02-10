@@ -23,12 +23,12 @@ impl TransactionManager {
         }
     }
 
-    pub fn start_transaction(&mut self, tx_id: u64) {
+    pub fn start_transaction(&mut self, isolation_level: IsolationLevel, tx_id: u64) {
         self.active_transactions.insert(
             tx_id,
             (
                 std::time::SystemTime::now(),
-                Transaction::new(tx_id, IsolationLevel::Serializable, None),
+                Transaction::new(tx_id, isolation_level, None),
             ),
         );
     }

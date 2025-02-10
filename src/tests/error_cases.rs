@@ -6,8 +6,8 @@ use crate::{
 
 #[test]
 fn test_invalid_table_operations() {
-    let mut engine = setup_test_db("invalid_table_operations");
-    let mut tx = engine.begin_transaction(IsolationLevel::Serializable);
+    let mut engine = setup_test_db("invalid_table_operations", IsolationLevel::Serializable);
+    let mut tx = engine.begin_transaction();
 
     // Try to insert into non-existent table
     let record = create_test_record(1, "Test");
@@ -17,22 +17,22 @@ fn test_invalid_table_operations() {
 
 #[test]
 fn test_deadlock_detection() {
-    let mut engine = setup_test_db("deadlock_detection");
+    let mut engine = setup_test_db("deadlock_detection", IsolationLevel::RepeatableRead);
 
     // Setup
-    let mut tx = engine.begin_transaction(IsolationLevel::RepeatableRead);
+    let mut tx = engine.begin_transaction();
     engine.create_table(&mut tx, "test_table");
     engine.commit(tx).unwrap();
 
     // Create initial records
-    let mut tx = engine.begin_transaction(IsolationLevel::RepeatableRead);
+    let mut tx = engine.begin_transaction();
     engine.insert_record(&mut tx, "test_table", create_test_record(1, "Test1"));
     engine.insert_record(&mut tx, "test_table", create_test_record(2, "Test2"));
     engine.commit(tx).unwrap();
 
     // Start two concurrent transactions
-    let mut tx1 = engine.begin_transaction(IsolationLevel::RepeatableRead);
-    let mut tx2 = engine.begin_transaction(IsolationLevel::RepeatableRead);
+    let mut tx1 = engine.begin_transaction();
+    let mut tx2 = engine.begin_transaction();
 
     // T1 locks record 1
     engine.delete_record(&mut tx1, "test_table", 1);
