@@ -7,19 +7,19 @@ use crate::{
     tests::setup_test_db,
 };
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread;
 
 #[test]
 fn test_concurrent_operations() {
-    let engine = Arc::new(parking_lot::Mutex::new(setup_test_db(
+    let engine = Arc::new(Mutex::new(setup_test_db(
         "concurrent_operations",
         IsolationLevel::Serializable,
     )));
 
     // Setup initial table
     {
-        let mut engine_guard = engine.lock();
+        let mut engine_guard = engine.lock().unwrap();
         let mut tx = engine_guard.begin_transaction();
         engine_guard.create_table(&mut tx, "test_table");
         engine_guard.commit(tx).unwrap();
@@ -36,7 +36,7 @@ fn test_concurrent_operations() {
 
                 // Insert records
                 {
-                    let mut engine_guard = engine.lock();
+                    let mut engine_guard = engine.lock().unwrap();
                     let mut tx = engine_guard.begin_transaction();
 
                     for i in 0..records_per_thread {
@@ -57,7 +57,7 @@ fn test_concurrent_operations() {
 
                 // Read and verify records
                 {
-                    let mut engine_guard = engine.lock();
+                    let mut engine_guard = engine.lock().unwrap();
                     let mut tx = engine_guard.begin_transaction();
 
                     for i in 0..records_per_thread {
@@ -83,7 +83,7 @@ fn test_concurrent_operations() {
     }
 
     // Final verification
-    let mut engine_guard = engine.lock();
+    let mut engine_guard = engine.lock().unwrap();
     let mut tx = engine_guard.begin_transaction();
 
     // Verify total number of records
@@ -108,14 +108,14 @@ fn test_concurrent_operations() {
 
 #[test]
 fn test_concurrent_large_data() {
-    let engine = Arc::new(parking_lot::Mutex::new(setup_test_db(
+    let engine = Arc::new(Mutex::new(setup_test_db(
         "concurrent_large_data",
         IsolationLevel::Serializable,
     )));
 
     // Setup table
     {
-        let mut engine_guard = engine.lock();
+        let mut engine_guard = engine.lock().unwrap();
         let mut tx = engine_guard.begin_transaction();
         engine_guard.create_table(&mut tx, "large_data");
         engine_guard.commit(tx).unwrap();
@@ -131,7 +131,7 @@ fn test_concurrent_large_data() {
 
                 // Insert large record
                 {
-                    let mut engine_guard = engine.lock();
+                    let mut engine_guard = engine.lock().unwrap();
                     let mut tx = engine_guard.begin_transaction();
 
                     let record = Record {
@@ -147,7 +147,7 @@ fn test_concurrent_large_data() {
 
                 // Verify data
                 {
-                    let mut engine_guard = engine.lock();
+                    let mut engine_guard = engine.lock().unwrap();
                     let mut tx = engine_guard.begin_transaction();
 
                     let record = engine_guard

@@ -5,11 +5,11 @@ test tests::error_cases::test_invalid_table_operations ... ok
 test tests::basic_operations::test_create_table ... ok
 test tests::buffer_pool::test_edge_case_page_sizes ... ok
 test tests::basic_operations::test_insert_and_get_record ... ok
-test tests::isolation_levels::test_serializable_isolation ... ok
 test tests::basic_operations::test_delete_record ... ok
+test tests::isolation_levels::test_serializable_isolation ... ok
 test tests::isolation_levels::test_read_committed_isolation ... ok
-test tests::isolation_levels::test_repeatable_read_isolation ... ok
 test tests::rollback::test_rollback_table_operations ... ok
+test tests::isolation_levels::test_repeatable_read_isolation ... ok
 test tests::rollback::test_rollback_record_operations ... ok
 test tests::wal_operations::test_wal_recovery ... ok
 test tests::large_data_persistence::test_large_data_persistence ... ok
@@ -19,5 +19,5 @@ test tests::concurrency::test_concurrent_large_data ... ok
 test tests::concurrency::test_concurrent_operations ... ok
 test tests::wal_operations::test_wal_rotation ... ok
 
-test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.73s
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.65s
 
