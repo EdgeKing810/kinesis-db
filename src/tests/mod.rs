@@ -6,9 +6,10 @@ use std::path::PathBuf;
 
 mod basic_operations;
 mod buffer_pool;
-mod database_engine;
+pub mod concurrency;
 mod error_cases;
 mod isolation_levels;
+mod large_data_persistence;
 mod performance;
 mod rollback;
 mod wal_operations;

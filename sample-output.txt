@@ -1,0 +1,53 @@
+Loaded 0 transactions according to RecoverPending policy:
+
+🚀 Initializing Database...
+✅ Tables created successfully
+✅ Users data inserted
+✅ Animals data inserted
+
+🔍 Running Queries...
+
+👥 User Statistics:
+Remote Workers: 4
+Senior Staff Members: 1
+
+🐾 Animal Statistics:
+Dog count: 3
+Cat count: 3
+Parrot count: 1
+Snake count: 1
+Lizard count: 1
+Horse count: 1
+Sheep count: 1
+Pig count: 1
+
+✏️ Testing Updates...
+✅ Updates completed successfully
+
+📊 Final Database State:
+
+👥 Users:
+ID 1: Alice - Senior Developer (Engineering)
+ID 2: Bob - UI Designer (Design)
+ID 3: Charlie - Product Manager (Management)
+ID 4: Diana - Lead Data Scientist (Analytics)
+ID 5: Eve - DevOps Engineer (Infrastructure)
+ID 6: Frank - CTO (Executive)
+ID 7: Grace - QA Engineer (Quality)
+ID 8: Henry - Solutions Architect (Engineering)
+
+🐾 Animals:
+ID 1: Max - Golden Retriever Dog (Friendly, USA)
+ID 2: Luna - German Shepherd Dog (Protective, Germany)
+ID 3: Rocky - French Bulldog Dog (Playful, France)
+ID 4: Bella - Persian Cat (Lazy, Iran)
+ID 5: Oliver - Maine Coon Cat (Independent, USA)
+ID 6: Lucy - Siamese Cat (Well-behaved, Thailand)
+ID 7: Ziggy - African Grey Parrot (Talkative, Congo)
+ID 8: Monty - Ball Python Snake (Calm, Africa)
+ID 9: Spike - Bearded Dragon Lizard (Friendly, Australia)
+ID 10: Thunder - Arabian Horse (Spirited, Arabia)
+ID 11: Wooley - Merino Sheep (Gentle, Australia)
+ID 12: Einstein - Vietnamese Pot-Belly Pig (Smart, Vietnam)
+
+✨ Database operations completed successfully!
