@@ -6,7 +6,6 @@ use super::{db_type::DatabaseType, table::Table};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Database {
-    pub db_type: DatabaseType,
-    // The tables in this database
-    pub tables: BTreeMap<String, Table>,
+    pub db_type: DatabaseType, // Whether the database is in-memory or on-disk
+    pub tables: BTreeMap<String, Table>, // The tables in the database
 }

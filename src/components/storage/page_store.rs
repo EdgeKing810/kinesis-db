@@ -1,53 +1,23 @@
-use std::fs::{File, OpenOptions};
-use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::sync::{Arc, Mutex};
+use std::{
+    fs::{File, OpenOptions},
+    io::{Read, Result, Seek, SeekFrom, Write},
+    sync::{Arc, Mutex},
+};
 
-use super::buffer::DiskManager;
-
-pub const PAGE_SIZE: usize = 16384; // 16KB pages
-const PAGE_HEADER_SIZE: usize = 16;
-
-#[derive(Debug)]
-pub struct Page {
-    pub id: u64,
-    pub data: Vec<u8>,
-    pub dirty: bool,
-}
-
-impl Page {
-    pub fn new(id: u64) -> Self {
-        Page {
-            id,
-            data: vec![0; PAGE_SIZE - PAGE_HEADER_SIZE],
-            dirty: true,
-        }
-    }
-
-    pub fn write_data(&mut self, offset: usize, data: &[u8]) -> io::Result<()> {
-        if offset + data.len() > PAGE_SIZE - PAGE_HEADER_SIZE {
-            // Instead of failing, split the data into multiple pages
-            self.data.clear();
-            let chunk_size = PAGE_SIZE - PAGE_HEADER_SIZE;
-            let first_chunk = &data[..chunk_size.min(data.len())];
-            self.data.extend_from_slice(first_chunk);
-        } else {
-            self.data.clear();
-            self.data.extend_from_slice(data);
-        }
-        self.dirty = true;
-        Ok(())
-    }
-}
+use super::{
+    disk_manager::DiskManager,
+    page::{Page, PAGE_HEADER_SIZE, PAGE_SIZE},
+};
 
 #[derive(Debug, Clone)]
 pub struct PageStore {
-    file: Arc<Mutex<File>>,
-    page_count: Arc<Mutex<u64>>,
-    free_pages: Arc<Mutex<Vec<u64>>>,
+    file: Arc<Mutex<File>>,           // File handle for the page store
+    page_count: Arc<Mutex<u64>>,      // Total number of pages in the store
+    free_pages: Arc<Mutex<Vec<u64>>>, // List of free pages available for reuse
 }
 
 impl PageStore {
-    pub fn new(path: &str) -> io::Result<Self> {
+    pub fn new(path: &str) -> Result<Self> {
         let file = OpenOptions::new()
             .read(true)
             .write(true)
@@ -78,7 +48,7 @@ impl PageStore {
 
 // Implement DiskManager trait for PageStore
 impl DiskManager for PageStore {
-    fn read_page(&self, page_id: u64) -> io::Result<Page> {
+    fn read_page(&self, page_id: u64) -> Result<Page> {
         let mut page = Page::new(page_id);
         let mut file = self.file.lock().unwrap();
         file.seek(SeekFrom::Start(page_id * PAGE_SIZE as u64))?;
@@ -88,7 +58,7 @@ impl DiskManager for PageStore {
         Ok(page)
     }
 
-    fn write_page(&self, page: &Page) -> io::Result<()> {
+    fn write_page(&self, page: &Page) -> Result<()> {
         let mut file = self.file.lock().unwrap();
         file.seek(SeekFrom::Start(page.id * PAGE_SIZE as u64))?;
         file.write_all(&page.data)?;
@@ -96,7 +66,7 @@ impl DiskManager for PageStore {
         Ok(())
     }
 
-    fn allocate_page(&self) -> io::Result<u64> {
+    fn allocate_page(&self) -> Result<u64> {
         // First try to reuse a freed page
         if let Some(page_id) = self.free_pages.lock().unwrap().pop() {
             return Ok(page_id);

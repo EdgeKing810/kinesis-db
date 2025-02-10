@@ -10,29 +10,11 @@ use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
 };
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub enum ValueType {
-    Int(i64),
-    Float(f64),
-    Bool(bool),
-    Str(String),
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Record {
-    pub id: u64,
-    pub values: Vec<ValueType>,
-    pub version: u64,   // Add version for MVCC
-    pub timestamp: u64, // Add timestamp for temporal queries
-}
-
-// ========== Table ==========
+use super::{record::Record, value_type::ValueType};
 
 #[derive(Debug, Clone)]
 pub struct Table {
-    // For demonstration, we map from record ID to Record
-    // BTreeMap is our "B-Tree" structure
-    pub data: BTreeMap<u64, Arc<RwLock<Record>>>,
+    pub data: BTreeMap<u64, Arc<RwLock<Record>>>, // A map of record IDs to records
 }
 
 // Custom serialization for Table
@@ -62,7 +44,7 @@ impl<'de> Deserialize<'de> for Table {
             type Value = Table;
 
             fn expecting(&self, formatter: &mut Formatter) -> fmt::Result {
-                formatter.write_str("a map of record IDs to records")
+                formatter.write_str("A map of record IDs to records")
             }
 
             fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
@@ -89,25 +71,36 @@ impl Table {
     }
 
     pub fn insert_record(&mut self, record: Record) {
+        // Insert new a record into the table
         self.data.insert(record.id, Arc::new(RwLock::new(record)));
     }
 
     pub fn get_record(&self, id: &u64) -> Option<Arc<RwLock<Record>>> {
+        // Get a record from the table
         self.data.get(id).cloned()
     }
 
     pub fn delete_record(&mut self, id: &u64) -> Option<Arc<RwLock<Record>>> {
+        // Remove a record from the table
         self.data.remove(id)
     }
 
-    // Simple search function: we search for records where *any* field matches a string query
-    pub fn search_by_string(&self, query: &str) -> Vec<Arc<RwLock<Record>>> {
+    // Simple search function: we search for records where *any* String field matches a string query
+    pub fn search_by_string(
+        &self,
+        query: &str,
+        case_insensitive: bool,
+    ) -> Vec<Arc<RwLock<Record>>> {
         self.data
             .values()
             .filter(|rec| {
                 let record = rec.read().unwrap();
                 record.values.iter().any(|value| match value {
-                    ValueType::Str(s) => s.contains(query),
+                    ValueType::Str(s) => {
+                        s.contains(query)
+                            || (case_insensitive
+                                && s.to_lowercase().contains(&query.to_lowercase()))
+                    }
                     _ => false,
                 })
             })

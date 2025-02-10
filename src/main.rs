@@ -2,8 +2,9 @@ use std::fs::create_dir_all;
 
 use components::database::db_type::DatabaseType;
 use components::database::engine::DBEngine;
+use components::database::record::Record;
 use components::database::restore_policy::RestorePolicy;
-use components::database::table::{Record, ValueType};
+use components::database::value_type::ValueType;
 use components::transaction::config::TransactionConfig;
 use components::transaction::isolation_level::IsolationLevel;
 

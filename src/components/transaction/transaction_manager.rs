@@ -7,10 +7,10 @@ use super::{config::TransactionConfig, isolation_level::IsolationLevel, transact
 
 // Add a transaction manager to handle concurrent transactions
 pub struct TransactionManager {
-    active_transactions: HashMap<u64, (SystemTime, Transaction)>,
-    locks: HashMap<(String, u64), u64>, // (table, id) -> tx_id
-    wait_for_graph: HashMap<u64, HashSet<u64>>, // Changed Vec to HashSet
-    config: TransactionConfig,
+    active_transactions: HashMap<u64, (SystemTime, Transaction)>, // List of active transactions
+    locks: HashMap<(String, u64), u64>, // (table, record_id) -> tx_id mapping
+    wait_for_graph: HashMap<u64, HashSet<u64>>, // Wait-for graph for deadlock detection (tx_id -> waiting for [tx_id])
+    pub config: TransactionConfig,              // Transaction configuration object
 }
 
 impl TransactionManager {
@@ -53,7 +53,7 @@ impl TransactionManager {
         let key = (table_name.to_string(), record_id);
 
         if let Some(&holding_tx) = self.locks.get(&key) {
-            // If we already hold this lock, return true
+            // If this lock is already being held, return true
             if holding_tx == tx_id {
                 return true;
             }
@@ -72,7 +72,7 @@ impl TransactionManager {
             return false;
         }
 
-        // If we get here, we can acquire the lock
+        // The lock can be acquired if the code reaches here
         self.locks.insert(key, tx_id);
         true
     }
@@ -148,36 +148,44 @@ impl TransactionManager {
         }
     }
 
+    /// Checks if there is a deadlock involving the given transaction ID
+    /// by detecting cycles in the wait-for graph.
     pub fn has_deadlock(&self, tx_id: u64) -> bool {
         let mut visited = HashSet::new();
         let mut path = HashSet::new();
 
+        // Inner function that implements depth-first search to detect cycles
         fn detect_cycle(
             graph: &HashMap<u64, HashSet<u64>>,
             current: u64,
             visited: &mut HashSet<u64>,
             path: &mut HashSet<u64>,
         ) -> bool {
+            // If node hasn't been visited, explore it
             if !visited.contains(&current) {
                 visited.insert(current);
-                path.insert(current);
+                path.insert(current); // Add current node to path
 
+                // Check all neighbors of current node
                 if let Some(neighbors) = graph.get(&current) {
                     for &next in neighbors {
                         if !visited.contains(&next) {
+                            // Recursively check unvisited neighbors
                             if detect_cycle(graph, next, visited, path) {
                                 return true;
                             }
                         } else if path.contains(&next) {
+                            // If neighbor is in current path, we found a cycle
                             return true;
                         }
                     }
                 }
             }
-            path.remove(&current);
+            path.remove(&current); // Remove current node from path when backtracking
             false
         }
 
+        // Start cycle detection from the given transaction ID
         detect_cycle(&self.wait_for_graph, tx_id, &mut visited, &mut path)
     }
 }

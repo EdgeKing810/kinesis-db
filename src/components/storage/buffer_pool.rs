@@ -1,42 +1,14 @@
-use std::collections::HashMap;
-use std::sync::{Arc, Mutex, RwLock};
-use std::time::Instant;
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex, RwLock},
+    time::Instant,
+};
 
-use super::page::Page;
-
-#[derive(Debug)]
-pub struct BufferFrame {
-    pub page: RwLock<Page>, // Change to RwLock<Page>
-    pub dirty: Mutex<bool>,
-    pub pin_count: Mutex<u32>,
-    pub last_used: Mutex<Instant>,
-}
-
-impl BufferFrame {
-    pub fn read_page(&self) -> std::sync::RwLockReadGuard<'_, Page> {
-        self.page.read().unwrap()
-    }
-
-    pub fn get_page(&self) -> &RwLock<Page> {
-        &self.page
-    }
-
-    pub fn get_pin_count(&self) -> u32 {
-        *self.pin_count.lock().unwrap()
-    }
-
-    pub fn is_dirty(&self) -> bool {
-        *self.dirty.lock().unwrap()
-    }
-
-    pub fn set_dirty(&self, value: bool) {
-        *self.dirty.lock().unwrap() = value;
-    }
-}
+use super::{buffer_frame::BufferFrame, disk_manager::DiskManager};
 
 pub struct BufferPool {
-    frames: HashMap<u64, Arc<BufferFrame>>,
-    max_size: usize,
+    frames: HashMap<u64, Arc<BufferFrame>>, // Map of page id to buffer frame
+    max_size: usize,                        // Maximum number of frames in the pool
 }
 
 impl BufferPool {
@@ -48,6 +20,7 @@ impl BufferPool {
     }
 
     pub fn get_page(&mut self, page_id: u64, disk_manager: &impl DiskManager) -> Arc<BufferFrame> {
+        // Check if the page is already in the buffer pool
         if let Some(frame) = self.frames.get(&page_id) {
             let frame = frame.clone();
             let mut count = frame.pin_count.lock().unwrap();
@@ -56,10 +29,12 @@ impl BufferPool {
             return frame.clone();
         }
 
+        // Evict a page if the buffer pool is full
         if self.frames.len() >= self.max_size {
             self.evict_page_lru(disk_manager);
         }
 
+        // Read the page from disk and add it to the buffer pool
         let page = disk_manager.read_page(page_id).unwrap();
         let frame = Arc::new(BufferFrame {
             page: RwLock::new(page),
@@ -73,6 +48,7 @@ impl BufferPool {
     }
 
     fn evict_page_lru(&mut self, disk_manager: &impl DiskManager) {
+        // Find the least recently used page that is unpinned and evict it
         if let Some((page_id, frame)) = self.find_unpinned_page() {
             if frame.is_dirty() {
                 let page = frame.read_page();
@@ -91,6 +67,7 @@ impl BufferPool {
     }
 
     pub fn unpin_page(&mut self, page_id: u64, is_dirty: bool) {
+        // Decrement the pin count for the page and mark it as dirty if needed
         if let Some(frame) = self.frames.get(&page_id) {
             let mut count = frame.pin_count.lock().unwrap();
             if *count > 0 {
@@ -128,21 +105,4 @@ impl BufferPool {
             }
         }
     }
-}
-
-// Add Clone implementation for Page if not already present
-impl Clone for Page {
-    fn clone(&self) -> Self {
-        Page {
-            id: self.id,
-            data: self.data.clone(),
-            dirty: self.dirty,
-        }
-    }
-}
-
-pub trait DiskManager {
-    fn read_page(&self, page_id: u64) -> std::io::Result<Page>;
-    fn write_page(&self, page: &Page) -> std::io::Result<()>;
-    fn allocate_page(&self) -> std::io::Result<u64>;
 }

@@ -7,38 +7,29 @@ use std::{
 use sha2::{Digest, Sha256};
 
 use crate::components::{
-    buffer::{BufferPool, DiskManager},
-    commit_guard::CommitGuard,
-    page::PageStore,
+    storage::{
+        buffer_pool::BufferPool, disk_manager::DiskManager, page_store::PageStore,
+        wal::WriteAheadLog,
+    },
     transaction::{
         config::TransactionConfig, isolation_level::IsolationLevel, manager::TransactionManager,
         transaction::Transaction,
     },
-    wal::WriteAheadLog,
 };
 
 use super::{
-    database::Database,
-    db_type::DatabaseType,
-    restore_policy::RestorePolicy,
-    table::{Record, Table},
+    commit_guard::CommitGuard, database::Database, db_type::DatabaseType, record::Record,
+    restore_policy::RestorePolicy, table::Table,
 };
 
 pub struct DBEngine {
-    // The actual database data (in memory)
-    db: Arc<RwLock<Database>>,
-    // Path to the disk file
-    file_path: String,
-    // The Write Ahead Log
-    wal: WriteAheadLog,
-    // The transaction manager
-    tx_manager: TransactionManager,
-    // The page store
-    page_store: PageStore,
-    // The buffer pool
-    buffer_pool: Arc<Mutex<BufferPool>>,
-    // The restore policy for the WAL
-    restore_policy: RestorePolicy,
+    db: Arc<RwLock<Database>>,           // The actual database data (in memory)
+    file_path: String,                   // Path to the disk file
+    wal: WriteAheadLog,                  // // The Path to the Write Ahead Log
+    tx_manager: TransactionManager,      // The transaction manager
+    page_store: PageStore,               // The page store
+    buffer_pool: Arc<Mutex<BufferPool>>, // The buffer pool
+    restore_policy: RestorePolicy,       // The restore policy for the WAL
 }
 
 impl DBEngine {
@@ -248,16 +239,6 @@ impl DBEngine {
         }
 
         let result = (|| {
-            // Add table existence validation
-            {
-                let db_read = self.db.read().unwrap();
-                for (table_name, _) in &tx.pending_inserts {
-                    if !db_read.tables.contains_key(table_name) {
-                        return Err(format!("Table '{}' does not exist", table_name));
-                    }
-                }
-            }
-
             self.validate_transaction(&tx)?;
 
             let mut db_lock = self.db.write().unwrap();
@@ -375,27 +356,33 @@ impl DBEngine {
         for (table_name, mut record) in tx.pending_inserts.clone() {
             record.version += 1;
             record.timestamp = timestamp;
-            let tbl = db_lock.tables.entry(table_name).or_insert(Table::new());
-            tbl.insert_record(record);
+
+            if let Some(tbl) = db_lock.tables.get_mut(&table_name) {
+                tbl.insert_record(record.clone());
+            } else {
+                return Err(format!("Table not found: {}", table_name));
+            }
         }
 
         Ok(())
     }
 
     fn get_table_page_ids(&self, table_name: &str) -> Option<Vec<u64>> {
+        // Load TOC and get page IDs for the table
         let mut buffer_pool = self.buffer_pool.lock().unwrap();
         let toc_frame = buffer_pool.get_page(0, &self.page_store);
-        let toc = toc_frame.get_page().read().unwrap(); // Updated this line
+        let toc = toc_frame.get_page().read().unwrap();
         let table_locations: HashMap<String, Vec<u64>> =
             bincode::deserialize(&toc.data).unwrap_or_default();
         table_locations.get(table_name).cloned()
     }
 
-    // Helper method to get page ID for a record
     fn get_record_page_id(&self, table_name: &str, record_id: u64) -> Option<u64> {
+        // Load TOC and get page IDs for the table
         if let Some(page_ids) = self.get_table_page_ids(table_name) {
             let mut buffer_pool = self.buffer_pool.lock().unwrap();
             for page_id in page_ids {
+                // Load the page and check for the record
                 let frame = buffer_pool.get_page(page_id, &self.page_store);
                 let page_data = frame.get_page().read().unwrap(); // Updated this line
                 let records: Vec<Record> =
@@ -424,6 +411,7 @@ impl DBEngine {
             {
                 return Some(record.clone());
             }
+
             // If not in pending inserts, it might be deleted
             if tx
                 .pending_deletes
@@ -459,6 +447,7 @@ impl DBEngine {
     }
 
     fn get_latest_record(&self, db: &Database, table_name: &str, id: u64) -> Option<Record> {
+        // Return the latest record we can find, regardless of timestamp
         db.tables
             .get(table_name)
             .and_then(|tbl| tbl.get_record(&id))
@@ -480,6 +469,7 @@ impl DBEngine {
         table_name: &str,
         id: u64,
     ) -> Option<Record> {
+        // Return the record from the snapshot if it exists
         snapshot
             .tables
             .get(table_name)
@@ -559,7 +549,6 @@ impl DBEngine {
         }
     }
 
-    // Make search operation transactional
     pub fn search_records(
         &self,
         tx: &mut Transaction,
@@ -581,11 +570,11 @@ impl DBEngine {
         }
     }
 
-    // Helper methods for search
     fn search_latest(&self, db: &Database, table_name: &str, query: &str) -> Vec<Record> {
+        // Return all records that match the query, regardless of timestamp
         if let Some(table) = db.tables.get(table_name) {
             table
-                .search_by_string(query)
+                .search_by_string(query, true)
                 .into_iter()
                 .map(|arc| arc.read().unwrap().clone())
                 .collect()
@@ -595,9 +584,10 @@ impl DBEngine {
     }
 
     fn search_committed(&self, db: &Database, table_name: &str, query: &str) -> Vec<Record> {
+        // Return only committed records that match the query
         if let Some(table) = db.tables.get(table_name) {
             table
-                .search_by_string(query)
+                .search_by_string(query, true)
                 .into_iter()
                 .filter_map(|arc| {
                     let record = arc.read().unwrap();
@@ -614,9 +604,10 @@ impl DBEngine {
     }
 
     fn search_snapshot(&self, snapshot: &Database, table_name: &str, query: &str) -> Vec<Record> {
+        // Return records from the snapshot that match the query
         if let Some(table) = snapshot.tables.get(table_name) {
             table
-                .search_by_string(query)
+                .search_by_string(query, true)
                 .into_iter()
                 .map(|arc| arc.read().unwrap().clone())
                 .collect()
@@ -687,19 +678,39 @@ impl DBEngine {
                     .page_store
                     .allocate_page()
                     .map_err(|e| format!("Failed to allocate page: {}", e))?;
-
-                let frame = buffer_pool.get_page(page_id, &self.page_store);
-                {
-                    let serialized = bincode::serialize(chunk)
-                        .map_err(|e| format!("Failed to serialize records: {}", e))?;
-
-                    let mut page = frame.get_page().write().unwrap();
-                    page.write_data(0, &serialized)
-                        .map_err(|e| format!("Failed to write data: {}", e))?;
-                }
-
                 page_ids.push(page_id);
-                buffer_pool.unpin_page(page_id, true);
+
+                let serialized = bincode::serialize(chunk)
+                    .map_err(|e| format!("Failed to serialize records: {}", e))?;
+
+                // Handle overflow data
+                let mut current_data = serialized;
+                let mut current_page_id = page_id;
+
+                loop {
+                    let frame = buffer_pool.get_page(current_page_id, &self.page_store);
+                    let mut page = frame.get_page().write().unwrap();
+
+                    match page
+                        .write_data(0, &current_data)
+                        .map_err(|e| format!("Failed to write data: {}", e))?
+                    {
+                        Some(remaining) => {
+                            // Allocate new page for remaining data
+                            current_page_id = self
+                                .page_store
+                                .allocate_page()
+                                .map_err(|e| format!("Failed to allocate page: {}", e))?;
+                            page_ids.push(current_page_id);
+                            current_data = remaining;
+                            buffer_pool.unpin_page(page.id, true);
+                        }
+                        None => {
+                            buffer_pool.unpin_page(page.id, true);
+                            break;
+                        }
+                    }
+                }
             }
 
             if !page_ids.is_empty() {
@@ -743,15 +754,11 @@ impl DBEngine {
         // Load database from disk first
         self.load_from_disk();
 
-        // Now using the consolidated load_transactions method
         let transactions = self.wal.load_transactions(&self.restore_policy)?;
 
-        // Rest of the recovery process remains the same
         // Apply each valid transaction
         for tx in transactions {
             if self.wal.is_transaction_valid(&tx)? {
-                // println!("Recovering transaction {}", tx.id);
-
                 // First handle table creations
                 if !tx.pending_table_creates.is_empty() {
                     let mut db_lock = self.db.write().unwrap();

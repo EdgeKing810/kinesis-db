@@ -15,9 +15,9 @@ fn test_bulk_operations() {
 
     let start = Instant::now();
 
-    // Insert 1000 records
+    // Insert 2500 records
     let mut tx = engine.begin_transaction(IsolationLevel::Serializable);
-    for i in 0..1000 {
+    for i in 0..2500 {
         engine.insert_record(
             &mut tx,
             "test_table",

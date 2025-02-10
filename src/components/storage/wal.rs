@@ -8,11 +8,9 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::components::{
-    database::{restore_policy::RestorePolicy, table::Record},
-    transaction::isolation_level::IsolationLevel,
+    database::{record::Record, restore_policy::RestorePolicy},
+    transaction::{isolation_level::IsolationLevel, transaction::Transaction},
 };
-
-use super::transaction::transaction::Transaction;
 
 // Define the WriteAheadLog structure
 pub struct WriteAheadLog {
@@ -21,11 +19,11 @@ pub struct WriteAheadLog {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WalEntry {
-    tx_id: u64,
-    timestamp: u64,
-    checksum: u64,
-    data: Vec<u8>,
-    status: String,
+    tx_id: u64,     // Transaction ID
+    timestamp: u64, // Timestamp of the transaction
+    checksum: u64,  // Checksum of the entry
+    data: Vec<u8>,  // Data associated with the entry
+    status: String, // Status of the transaction (pending, completed)
 }
 
 impl WriteAheadLog {
@@ -41,12 +39,13 @@ impl WriteAheadLog {
     }
 
     pub fn load_transactions(&self, policy: &RestorePolicy) -> Result<Vec<Transaction>, String> {
+        // Open the WAL file
         let file = match File::open(&self.path) {
             Ok(f) => f,
             Err(_) => return Ok(Vec::new()),
         };
 
-        // Early return for Discard policy
+        // If the policy is Discard, return an empty list as no transactions need to be restored
         if *policy == RestorePolicy::Discard {
             return Ok(Vec::new());
         }
@@ -55,30 +54,24 @@ impl WriteAheadLog {
         let mut transactions = Vec::new();
 
         for line in reader.lines() {
+            // Parse each line as a JSON object
             if let Ok(line) = line {
                 let entry: serde_json::Value = serde_json::from_str(&line)
                     .map_err(|e| format!("Failed to parse WAL entry: {}", e))?;
 
+                // Check if the entry should be restored based on the policy
                 if *policy == RestorePolicy::RecoverPending
                     && entry["status"].as_str() != Some("pending")
                 {
                     continue;
                 }
 
-                // Rest of transaction loading logic
+                // Create a new transaction
                 let mut tx = Transaction::new(
                     entry["tx_id"].as_u64().unwrap(),
                     IsolationLevel::Serializable,
                     None,
                 );
-
-                // Restore table creates
-                if let Some(creates) = entry["table_creates"].as_array() {
-                    tx.pending_table_creates = creates
-                        .iter()
-                        .map(|v| v.as_str().unwrap().to_string())
-                        .collect();
-                }
 
                 // Restore table drops
                 if let Some(drops) = entry["table_drops"].as_array() {
@@ -88,13 +81,12 @@ impl WriteAheadLog {
                         .collect();
                 }
 
-                // Restore inserts
-                if let Some(inserts) = entry["inserts"].as_array() {
-                    for insert in inserts {
-                        let table = insert[0].as_str().unwrap();
-                        let record: Record = serde_json::from_value(insert[1].clone()).unwrap();
-                        tx.pending_inserts.push((table.to_string(), record));
-                    }
+                // Restore table creates
+                if let Some(creates) = entry["table_creates"].as_array() {
+                    tx.pending_table_creates = creates
+                        .iter()
+                        .map(|v| v.as_str().unwrap().to_string())
+                        .collect();
                 }
 
                 // Restore deletes
@@ -104,6 +96,15 @@ impl WriteAheadLog {
                         let id = delete[1].as_u64().unwrap();
                         let record: Record = serde_json::from_value(delete[2].clone()).unwrap();
                         tx.pending_deletes.push((table.to_string(), id, record));
+                    }
+                }
+
+                // Restore inserts
+                if let Some(inserts) = entry["inserts"].as_array() {
+                    for insert in inserts {
+                        let table = insert[0].as_str().unwrap();
+                        let record: Record = serde_json::from_value(insert[1].clone()).unwrap();
+                        tx.pending_inserts.push((table.to_string(), record));
                     }
                 }
 
@@ -216,7 +217,6 @@ impl WriteAheadLog {
                     .map_err(|e| format!("Failed to parse WAL entry: {}", e))?;
 
                 if entry["tx_id"].as_u64() == Some(tx_id) {
-                    // println!("Marking transaction {} as completed", tx_id);
                     entry["status"] = json!("completed");
                     found = true;
                 }
@@ -240,6 +240,7 @@ impl WriteAheadLog {
             writeln!(writer, "{}", entry.to_string())
                 .map_err(|e| format!("Failed to write WAL entry: {}", e))?;
         }
+
         writer
             .flush()
             .map_err(|e| format!("Failed to flush WAL: {}", e))?;
@@ -248,8 +249,10 @@ impl WriteAheadLog {
     }
 
     pub fn is_transaction_valid(&self, tx: &Transaction) -> Result<bool, String> {
+        // Open the WAL file
         let file = File::open(&self.path).map_err(|e| format!("Failed to open WAL: {}", e))?;
 
+        // Check if the transaction is valid by comparing checksums
         let reader = BufReader::new(file);
 
         for line in reader.lines() {
@@ -284,6 +287,7 @@ impl WriteAheadLog {
     }
 
     fn rotate_log(&mut self) -> Result<(), String> {
+        // Create backup path with timestamp
         let backup_path = format!(
             "{}.{}",
             &self.path,
@@ -304,17 +308,18 @@ impl WriteAheadLog {
             .open(&self.path)
             .map_err(|e| format!("Failed to create new WAL: {}", e))?;
 
-        // Keep backup for recovery if needed
         Ok(())
     }
 
     pub fn cleanup_completed_transactions(&mut self) -> Result<(), String> {
+        // Read all entries from the WAL
         let mut content = String::new();
         let file = File::open(&self.path).map_err(|e| format!("Failed to open WAL: {}", e))?;
         BufReader::new(file)
             .read_to_string(&mut content)
             .map_err(|e| format!("Failed to read WAL: {}", e))?;
 
+        // Count the number of completed transactions
         let completed_count = content
             .lines()
             .filter(|line| {
@@ -342,6 +347,7 @@ impl WriteAheadLog {
                         .map_err(|e| format!("Failed to write to new WAL: {}", e))?;
                 }
             }
+
             writer
                 .flush()
                 .map_err(|e| format!("Failed to flush WAL: {}", e))?;

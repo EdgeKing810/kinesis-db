@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 
-// Add isolation level enum
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum IsolationLevel {
     /// Lowest isolation level. Allows:

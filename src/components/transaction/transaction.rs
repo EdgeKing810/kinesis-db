@@ -1,22 +1,21 @@
 use serde::{Deserialize, Serialize};
 
-use crate::components::database::{database::Database, table::Record};
+use crate::components::database::{database::Database, record::Record};
 
 use super::isolation_level::IsolationLevel;
 
-// A simplified transaction struct
 #[derive(Serialize, Deserialize)]
 pub struct Transaction {
-    pub id: u64,
-    pub isolation_level: IsolationLevel,
-    pub pending_inserts: Vec<(String, Record)>,
-    pub pending_deletes: Vec<(String, u64, Record)>,
-    pub read_set: Vec<(String, u64, u64)>, // (table, record_id, version)
-    pub write_set: Vec<(String, u64)>,     // (table, record_id)
-    pub snapshot: Option<Database>,
-    pub start_timestamp: u64,
-    pub pending_table_creates: Vec<String>,
-    pub pending_table_drops: Vec<String>,
+    pub id: u64,                                     // Unique transaction ID
+    pub isolation_level: IsolationLevel,             // Isolation level of the transaction
+    pub pending_inserts: Vec<(String, Record)>,      // (table, record)
+    pub pending_deletes: Vec<(String, u64, Record)>, // (table, record_id, record)
+    pub read_set: Vec<(String, u64, u64)>,           // (table, record_id, version)
+    pub write_set: Vec<(String, u64)>,               // (table, record_id)
+    pub snapshot: Option<Database>, // Snapshot of the database at the start of the transaction
+    pub start_timestamp: u64,       // Start time of the transaction
+    pub pending_table_creates: Vec<String>, // List of tables to create
+    pub pending_table_drops: Vec<String>, // List of tables to drop
 }
 
 impl Transaction {
