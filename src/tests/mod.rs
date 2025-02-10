@@ -5,6 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 
 mod basic_operations;
+mod buffer_pool;
 mod error_cases;
 mod isolation_levels;
 mod performance;
