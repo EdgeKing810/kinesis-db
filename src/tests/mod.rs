@@ -11,6 +11,7 @@ mod isolation_levels;
 mod performance;
 mod rollback;
 mod wal_operations;
+mod database_engine;
 
 // Helper to create a unique test directory
 fn get_test_dir() -> PathBuf {
@@ -70,7 +71,7 @@ pub fn setup_test_db(test_id: &str, isolation_level: IsolationLevel) -> DBEngine
     )
 }
 
-pub fn setup_test_db_wal(test_id: &str, isolation_level: IsolationLevel) -> DBEngine {
+pub fn setup_test_db_dirty(test_id: &str, isolation_level: IsolationLevel) -> DBEngine {
     let (db_path, wal_path) = get_test_files(test_id);
     setup_test_db_with_paths(
         db_path,

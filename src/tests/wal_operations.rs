@@ -1,6 +1,6 @@
 #![allow(unused_imports)]
 use crate::{
-    tests::{create_test_record, get_test_dir, setup_test_db, setup_test_db_wal},
+    tests::{create_test_record, get_test_dir, setup_test_db, setup_test_db_dirty},
     IsolationLevel,
 };
 use std::fs;
@@ -20,7 +20,7 @@ fn test_wal_recovery() {
 
     // Force a new engine instance to test recovery
     drop(engine);
-    let mut engine = setup_test_db_wal("wal_recovery", IsolationLevel::Serializable);
+    let mut engine = setup_test_db_dirty("wal_recovery", IsolationLevel::Serializable);
 
     let mut tx = engine.begin_transaction();
     let record = engine.get_record(&mut tx, "test_table", 1);

@@ -8,8 +8,7 @@ use sha2::{Digest, Sha256};
 
 use crate::components::{
     storage::{
-        buffer_pool::BufferPool, disk_manager::DiskManager, page_store::PageStore,
-        wal::WriteAheadLog,
+        buffer_pool::BufferPool, disk_manager::DiskManager, page::PAGE_SIZE, page_store::PageStore, wal::WriteAheadLog
     },
     transaction::{
         config::TransactionConfig, isolation_level::IsolationLevel, manager::TransactionManager,
@@ -641,19 +640,33 @@ impl DBEngine {
         // Load each table
         for (table_name, page_ids) in table_locations {
             let mut table = Table::new();
+            let mut current_batch = Vec::new();
+            const BATCH_SIZE: usize = PAGE_SIZE * 4; // Read 4 pages worth of data at a time
 
-            for page_id in page_ids {
+            for &page_id in &page_ids {
                 let frame = buffer_pool.get_page(page_id, &self.page_store);
-                let records: Vec<Record> = {
-                    let page = frame.get_page().read().unwrap();
-                    bincode::deserialize(&page.data).unwrap_or_default()
-                };
-
-                for record in records {
-                    table.insert_record(record);
-                }
-
+                let page = frame.get_page().read().unwrap();
+                current_batch.extend_from_slice(&page.data);
                 buffer_pool.unpin_page(page_id, false);
+
+                // Process batch when it gets large enough
+                if current_batch.len() >= BATCH_SIZE {
+                    if let Ok(records) = bincode::deserialize::<Vec<Record>>(&current_batch) {
+                        for record in records {
+                            table.insert_record(record);
+                        }
+                    }
+                    current_batch.clear();
+                }
+            }
+
+            // Process any remaining data
+            if !current_batch.is_empty() {
+                if let Ok(records) = bincode::deserialize::<Vec<Record>>(&current_batch) {
+                    for record in records {
+                        table.insert_record(record);
+                    }
+                }
             }
 
             db_lock.tables.insert(table_name, table);
@@ -665,8 +678,8 @@ impl DBEngine {
         let mut buffer_pool = self.buffer_pool.lock().unwrap();
         let mut table_locations = HashMap::new();
 
-        // Reduce chunk size to fit within page size
-        let chunk_size = 50; // Reduced from 100
+        // Chunk size that balances memory usage and performance
+        const BATCH_SIZE: usize = 1000;
 
         for (table_name, table) in &db_lock.tables {
             let mut page_ids = Vec::new();
@@ -676,44 +689,29 @@ impl DBEngine {
                 .map(|r| r.read().unwrap().clone())
                 .collect();
 
-            // Process chunks with smaller size
-            for chunk in records.chunks(chunk_size) {
-                let page_id = self
-                    .page_store
-                    .allocate_page()
-                    .map_err(|e| format!("Failed to allocate page: {}", e))?;
-                page_ids.push(page_id);
-
+            // Process records in batches to manage memory usage
+            for chunk in records.chunks(BATCH_SIZE) {
                 let serialized = bincode::serialize(chunk)
                     .map_err(|e| format!("Failed to serialize records: {}", e))?;
-
-                // Handle overflow data
+                
                 let mut current_data = serialized;
-                let mut current_page_id = page_id;
+                
+                while !current_data.is_empty() {
+                    let page_id = self.page_store
+                        .allocate_page()
+                        .map_err(|e| format!("Failed to allocate page: {}", e))?;
+                    page_ids.push(page_id);
 
-                loop {
-                    let frame = buffer_pool.get_page(current_page_id, &self.page_store);
-                    let mut page = frame.get_page().write().unwrap();
+                    let frame = buffer_pool.get_page(page_id, &self.page_store);
+                    let remaining = {
+                        let mut page = frame.get_page().write().unwrap();
+                        let result = page.write_data(0, &current_data)
+                            .map_err(|e| format!("Failed to write data: {}", e))?;
+                        buffer_pool.unpin_page(page_id, true);
+                        result
+                    };
 
-                    match page
-                        .write_data(0, &current_data)
-                        .map_err(|e| format!("Failed to write data: {}", e))?
-                    {
-                        Some(remaining) => {
-                            // Allocate new page for remaining data
-                            current_page_id = self
-                                .page_store
-                                .allocate_page()
-                                .map_err(|e| format!("Failed to allocate page: {}", e))?;
-                            page_ids.push(current_page_id);
-                            current_data = remaining;
-                            buffer_pool.unpin_page(page.id, true);
-                        }
-                        None => {
-                            buffer_pool.unpin_page(page.id, true);
-                            break;
-                        }
-                    }
+                    current_data = remaining.unwrap_or_default();
                 }
             }
 
@@ -765,18 +763,6 @@ impl DBEngine {
         // Apply each valid transaction
         for tx in transactions {
             if self.wal.is_transaction_valid(&tx)? {
-                // First handle table creations
-                if !tx.pending_table_creates.is_empty() {
-                    let mut db_lock = self.db.write().unwrap();
-                    for table_name in &tx.pending_table_creates {
-                        db_lock
-                            .tables
-                            .entry(table_name.clone())
-                            .or_insert_with(Table::new);
-                    }
-                }
-
-                // Then handle the records
                 let mut db_lock = self.db.write().unwrap();
                 let timestamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)

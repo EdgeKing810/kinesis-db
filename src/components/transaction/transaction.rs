@@ -4,7 +4,7 @@ use crate::components::database::{database::Database, record::Record};
 
 use super::isolation_level::IsolationLevel;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Transaction {
     pub id: u64,                                     // Unique transaction ID
     pub isolation_level: IsolationLevel,             // Isolation level of the transaction
