@@ -42,6 +42,13 @@ impl DBEngine {
         tx_config: Option<TransactionConfig>,
         isolation_level: IsolationLevel,
     ) -> Self {
+        // Set buffer pool size based on database type
+        let buffer_pool_size = match db_type {
+            DatabaseType::InMemory => 10000, // Larger in-memory buffer
+            DatabaseType::Hybrid => 1000,    // Medium buffer for hybrid
+            DatabaseType::OnDisk => 100,     // Smaller buffer for disk-based
+        };
+
         let db = Database {
             db_type,
             tables: BTreeMap::new(),
@@ -53,18 +60,18 @@ impl DBEngine {
             wal: WriteAheadLog::new(wal_path),
             tx_manager: TransactionManager::new(tx_config),
             page_store: PageStore::new(&format!("{}.pages", file_path)).unwrap(),
-            buffer_pool: Arc::new(Mutex::new(BufferPool::new(1000))),
+            buffer_pool: Arc::new(Mutex::new(BufferPool::new(buffer_pool_size, db_type))),
             restore_policy,
             isolation_level,
         };
 
-        // First try to recover from any previous crash
-        if let Err(e) = engine.recover_from_crash() {
-            eprintln!("Warning: Recovery failed: {}", e);
+        // Only recover from disk for OnDisk and Hybrid types
+        if db_type != DatabaseType::InMemory {
+            if let Err(e) = engine.recover_from_crash() {
+                eprintln!("Warning: Recovery failed: {}", e);
+            }
+            engine.load_from_disk();
         }
-
-        // Then load from disk (this will give us the latest committed state)
-        engine.load_from_disk();
 
         engine
     }
@@ -257,22 +264,21 @@ impl DBEngine {
             // Calculate checksum after changes
             let checksum = self.calculate_checksum(&db_lock)?;
 
-            // Log to WAL using bincode
-            self.wal.log_transaction(&tx)?;
-            self.wal.sync()?;
+            // Log to WAL only for disk-based or hybrid databases
+            if db_lock.db_type != DatabaseType::InMemory {
+                self.wal.log_transaction(&tx)?;
+                self.wal.sync()?;
+            }
 
             // Persist changes if needed
             if db_lock.db_type == DatabaseType::OnDisk || db_lock.db_type == DatabaseType::Hybrid {
                 drop(db_lock);
                 self.save_to_disk_with_verification(checksum)?;
-            }
 
-            // Mark transaction as complete
-            self.wal.mark_transaction_complete(tx.id)?;
-
-            // Cleanup WAL periodically (every 100 transactions)
-            if let Err(e) = self.wal.cleanup_completed_transactions() {
-                eprintln!("Warning: WAL cleanup failed: {}", e);
+                self.wal.mark_transaction_complete(tx.id)?;
+                if let Err(e) = self.wal.cleanup_completed_transactions() {
+                    eprintln!("Warning: WAL cleanup failed: {}", e);
+                }
             }
 
             Ok(())
@@ -623,6 +629,14 @@ impl DBEngine {
     // ========== Disk Persistence ==========
 
     fn load_from_disk(&mut self) {
+        let db_lock = self.db.read().unwrap();
+
+        // Skip disk operations for in-memory database
+        if db_lock.db_type == DatabaseType::InMemory {
+            return;
+        }
+        drop(db_lock);
+
         if !Path::new(&format!("{}.pages", self.file_path)).exists() {
             return;
         }
@@ -676,6 +690,13 @@ impl DBEngine {
 
     fn save_to_disk(&mut self) -> Result<u64, String> {
         let db_lock = self.db.read().unwrap();
+
+        // Skip disk operations for in-memory database
+        if db_lock.db_type == DatabaseType::InMemory {
+            let checksum = self.calculate_checksum(&*db_lock)?;
+            return Ok(checksum);
+        }
+
         let mut buffer_pool = self.buffer_pool.lock().unwrap();
         let mut table_locations = HashMap::new();
 

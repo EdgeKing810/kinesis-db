@@ -1,10 +1,13 @@
 #![allow(unused_imports)]
 use crate::{
-    components::storage::{
-        buffer_pool::BufferPool,
-        disk_manager::DiskManager,
-        page::{PAGE_HEADER_SIZE, PAGE_SIZE},
-        page_store::PageStore,
+    components::{
+        database::db_type::DatabaseType,
+        storage::{
+            buffer_pool::BufferPool,
+            disk_manager::DiskManager,
+            page::{PAGE_HEADER_SIZE, PAGE_SIZE},
+            page_store::PageStore,
+        },
     },
     tests::get_test_dir,
 };
@@ -68,7 +71,7 @@ fn test_large_data_handling() {
 
     // Initialize components
     let page_store = PageStore::new(file_path_str).unwrap();
-    let mut buffer_pool = BufferPool::new(10);
+    let mut buffer_pool = BufferPool::new(10, DatabaseType::Hybrid);
 
     let page_ids = test_write_and_verify(large_data.clone(), &page_store, &mut buffer_pool);
 
@@ -105,7 +108,7 @@ fn test_edge_case_page_sizes() {
     for (index, size) in test_cases.iter().enumerate() {
         let test_data = vec![42u8; *size];
         let page_store = PageStore::new(file_path_str).unwrap();
-        let mut buffer_pool = BufferPool::new(10);
+        let mut buffer_pool = BufferPool::new(10, DatabaseType::Hybrid);
 
         let page_ids = test_write_and_verify(test_data.clone(), &page_store, &mut buffer_pool);
 

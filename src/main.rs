@@ -19,15 +19,14 @@ fn main() {
         deadlock_detection_interval_ms: 50, // Faster detection
     };
 
-    let engine_ondisk = DBEngine::new(
-        DatabaseType::OnDisk,
+    let mut engine = DBEngine::new(
+        DatabaseType::Hybrid,
         RestorePolicy::RecoverPending,
         "data/test_db",
         "data/wal.log",
         Some(tx_config),
         IsolationLevel::Serializable,
     );
-    let mut engine = engine_ondisk;
 
     println!("\n🚀 Initializing Database...");
     // Create data directory

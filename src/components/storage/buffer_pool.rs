@@ -4,18 +4,22 @@ use std::{
     time::Instant,
 };
 
+use crate::components::database::db_type::DatabaseType;
+
 use super::{buffer_frame::BufferFrame, disk_manager::DiskManager};
 
 pub struct BufferPool {
     frames: HashMap<u64, Arc<BufferFrame>>, // Map of page id to buffer frame
     max_size: usize,                        // Maximum number of frames in the pool
+    db_type: DatabaseType,                  // Type of database
 }
 
 impl BufferPool {
-    pub fn new(max_size: usize) -> Self {
+    pub fn new(max_size: usize, db_type: DatabaseType) -> Self {
         BufferPool {
             frames: HashMap::new(),
             max_size,
+            db_type,
         }
     }
 
@@ -47,8 +51,24 @@ impl BufferPool {
         frame
     }
 
-    fn evict_page_lru(&mut self, disk_manager: &impl DiskManager) {
-        // Find the least recently used page that is unpinned and evict it
+    pub fn evict_page_lru(&mut self, disk_manager: &impl DiskManager) {
+        match self.db_type {
+            // For InMemory, only evict if absolutely necessary
+            DatabaseType::InMemory => {
+                if (self.frames.len() as f64) < (self.max_size as f64 * 2.0) {
+                    return;
+                }
+            }
+            // For Hybrid, keep more pages in memory
+            DatabaseType::Hybrid => {
+                if (self.frames.len() as f64) < (self.max_size as f64 * 1.5) {
+                    return;
+                }
+            }
+            _ => (),
+        }
+
+        // Original eviction logic
         if let Some((page_id, frame)) = self.find_unpinned_page() {
             if frame.is_dirty() {
                 let page = frame.read_page();
