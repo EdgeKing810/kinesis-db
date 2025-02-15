@@ -22,6 +22,7 @@ use super::{
     restore_policy::RestorePolicy, table::Table,
 };
 
+#[derive(Debug)]
 pub struct DBEngine {
     db: Arc<RwLock<Database>>,           // The actual database data (in memory)
     file_path: String,                   // Path to the disk file

@@ -6,6 +6,7 @@ use std::{
 use super::{config::TransactionConfig, isolation_level::IsolationLevel, transaction::Transaction};
 
 // Add a transaction manager to handle concurrent transactions
+#[derive(Debug)]
 pub struct TransactionManager {
     active_transactions: HashMap<u64, (SystemTime, Transaction)>, // List of active transactions
     locks: HashMap<(String, u64), u64>, // (table, record_id) -> tx_id mapping

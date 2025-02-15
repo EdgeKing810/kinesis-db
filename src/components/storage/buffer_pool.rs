@@ -9,6 +9,7 @@ use crate::components::database::db_type::DatabaseType;
 
 use super::{buffer_frame::BufferFrame, disk_manager::DiskManager};
 
+#[derive(Debug)]
 pub struct BufferPool {
     frames: HashMap<u64, Arc<BufferFrame>>, // Map of page id to buffer frame
     max_size: usize,                        // Maximum number of frames in the pool

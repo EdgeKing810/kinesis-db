@@ -13,6 +13,7 @@ use crate::components::{
 };
 
 // Define the WriteAheadLog structure
+#[derive(Debug)]
 pub struct WriteAheadLog {
     path: String,
 }

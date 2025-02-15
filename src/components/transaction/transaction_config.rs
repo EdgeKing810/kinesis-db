@@ -1,3 +1,4 @@
+#[derive(Debug)]
 pub struct TransactionConfig {
     pub timeout_secs: u64, // Timeout in seconds to fail a transaction
     pub max_retries: u32,  // Maximum number of retries for a transaction

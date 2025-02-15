@@ -1,4 +1,9 @@
 #![allow(unused_imports)]
+use std::sync::Arc;
+use std::sync::Barrier;
+use std::sync::Mutex;
+use std::thread;
+
 use crate::{
     components::{
         database::{db_type::DatabaseType, record::Record, value_type::ValueType},
@@ -379,4 +384,139 @@ fn test_recovery_by_database_type() {
         let data_recovered = new_engine.get_record(&mut tx, "test_table", 1).is_some();
         assert_eq!(data_recovered, should_recover);
     }
+}
+
+#[test]
+fn test_concurrent_bulk_operations() {
+    let mut engine = create_test_db("concurrent_bulk", DatabaseType::Hybrid);
+
+    // Set up table
+    let mut tx = engine.begin_transaction();
+    engine.create_table(&mut tx, "test_table");
+    engine.commit(tx).unwrap();
+
+    // Constants for test configuration
+    const NUM_THREADS: usize = 4;
+    const RECORDS_PER_THREAD: usize = 1000;
+    const DELETE_PERCENTAGE: f32 = 0.3; // 30% of records will be deleted
+
+    // Create a barrier to synchronize all threads
+    let barrier = Arc::new(Barrier::new(NUM_THREADS));
+    let engine = Arc::new(Mutex::new(engine));
+
+    // Spawn threads for concurrent operations
+    let threads: Vec<_> = (0..NUM_THREADS)
+        .map(|thread_id| {
+            let engine = engine.clone();
+            let barrier = barrier.clone();
+
+            thread::spawn(move || {
+                let start_id = thread_id * RECORDS_PER_THREAD;
+
+                // Phase 1: Insert records
+                {
+                    let mut engine = engine.lock().unwrap();
+                    let mut tx = engine.begin_transaction();
+
+                    for i in 0..RECORDS_PER_THREAD {
+                        let record = Record {
+                            id: (start_id + i) as u64,
+                            values: vec![ValueType::Str(format!("Data from thread {}", thread_id))],
+                            version: 1,
+                            timestamp: 0,
+                        };
+                        engine.insert_record(&mut tx, "test_table", record);
+                    }
+                    engine.commit(tx).unwrap();
+                }
+
+                // Wait for all threads to complete inserts
+                barrier.wait();
+
+                // Phase 2: Delete some records
+                {
+                    let mut engine = engine.lock().unwrap();
+                    let mut tx = engine.begin_transaction();
+
+                    let records_to_delete =
+                        (RECORDS_PER_THREAD as f32 * DELETE_PERCENTAGE) as usize;
+                    for i in 0..records_to_delete {
+                        engine.delete_record(&mut tx, "test_table", (start_id + i) as u64);
+                    }
+                    engine.commit(tx).unwrap();
+                }
+
+                // Wait for all threads to complete deletes
+                barrier.wait();
+
+                // Phase 3: Verify records
+                let mut engine = engine.lock().unwrap();
+                let mut tx = engine.begin_transaction();
+
+                let records_remaining =
+                    RECORDS_PER_THREAD - (RECORDS_PER_THREAD as f32 * DELETE_PERCENTAGE) as usize;
+                let mut found_records = 0;
+
+                for i in 0..RECORDS_PER_THREAD {
+                    if engine
+                        .get_record(&mut tx, "test_table", (start_id + i) as u64)
+                        .is_some()
+                    {
+                        found_records += 1;
+                    }
+                }
+
+                assert_eq!(
+                    found_records, records_remaining,
+                    "Thread {} expected {} records but found {}",
+                    thread_id, records_remaining, found_records
+                );
+
+                engine.commit(tx).unwrap();
+            })
+        })
+        .collect();
+
+    // Wait for all threads to complete
+    for thread in threads {
+        thread.join().unwrap();
+    }
+
+    // Final verification
+    let mut engine = Arc::try_unwrap(engine).unwrap().into_inner().unwrap();
+    let mut tx = engine.begin_transaction();
+
+    let total_records = NUM_THREADS * RECORDS_PER_THREAD;
+    let expected_remaining = (total_records as f32 * (1.0 - DELETE_PERCENTAGE)) as usize;
+    let mut actual_remaining = 0;
+
+    for i in 0..total_records {
+        if engine.get_record(&mut tx, "test_table", i as u64).is_some() {
+            actual_remaining += 1;
+        }
+    }
+
+    assert_eq!(
+        actual_remaining, expected_remaining,
+        "Expected {} records after operations but found {}",
+        expected_remaining, actual_remaining
+    );
+
+    // Verify persistence
+    drop(engine);
+    let mut engine = create_test_db("concurrent_bulk", DatabaseType::Hybrid);
+    let mut tx = engine.begin_transaction();
+
+    let mut persisted_count = 0;
+    for i in 0..total_records {
+        if engine.get_record(&mut tx, "test_table", i as u64).is_some() {
+            persisted_count += 1;
+        }
+    }
+
+    assert_eq!(
+        persisted_count, expected_remaining,
+        "Expected {} records after restart but found {}",
+        expected_remaining, persisted_count
+    );
 }
