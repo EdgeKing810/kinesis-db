@@ -7,6 +7,7 @@ use std::path::PathBuf;
 mod basic_operations;
 mod buffer_pool;
 pub mod concurrency;
+mod database_types;
 mod error_cases;
 mod isolation_levels;
 mod large_data_persistence;
@@ -52,7 +53,7 @@ pub fn setup_test_db_with_paths(
     }
 
     DBEngine::new(
-        DatabaseType::OnDisk,
+        DatabaseType::Hybrid,
         restore_policy,
         db_path.to_str().unwrap(),
         wal_path.to_str().unwrap(),

@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    io::Result,
     sync::{Arc, Mutex, RwLock},
     time::Instant,
 };
@@ -52,38 +53,44 @@ impl BufferPool {
     }
 
     pub fn evict_page_lru(&mut self, disk_manager: &impl DiskManager) {
-        match self.db_type {
-            // For InMemory, only evict if absolutely necessary
-            DatabaseType::InMemory => {
-                if (self.frames.len() as f64) < (self.max_size as f64 * 2.0) {
-                    return;
-                }
-            }
-            // For Hybrid, keep more pages in memory
-            DatabaseType::Hybrid => {
-                if (self.frames.len() as f64) < (self.max_size as f64 * 1.5) {
-                    return;
-                }
-            }
-            _ => (),
+        // Adjust eviction thresholds
+        let threshold = match self.db_type {
+            DatabaseType::InMemory => self.max_size as f64 * 2.0,
+            DatabaseType::Hybrid => self.max_size as f64 * 1.2, // More aggressive eviction
+            DatabaseType::OnDisk => self.max_size as f64,
+        };
+
+        if (self.frames.len() as f64) < threshold {
+            return;
         }
 
-        // Original eviction logic
-        if let Some((page_id, frame)) = self.find_unpinned_page() {
-            if frame.is_dirty() {
-                let page = frame.read_page();
-                let _ = disk_manager.write_page(&page);
-            }
-            self.frames.remove(&page_id);
-        }
-    }
+        // Try to evict up to 10% of pages at once for better performance
+        let target_evictions = (self.max_size as f64 * 0.1) as usize;
+        let mut evicted = 0;
 
-    fn find_unpinned_page(&self) -> Option<(u64, Arc<BufferFrame>)> {
-        self.frames
+        let frames = self.frames.clone();
+
+        let candidates: Vec<_> = frames
             .iter()
             .filter(|(_, frame)| frame.get_pin_count() == 0)
-            .min_by_key(|(_, frame)| *frame.last_used.lock().unwrap())
-            .map(|(&id, frame)| (id, frame.clone()))
+            .collect();
+
+        for (page_id, frame) in candidates {
+            if evicted >= target_evictions {
+                break;
+            }
+
+            if frame.is_dirty() {
+                let page = frame.read_page();
+                if disk_manager.write_page(&page).is_ok() {
+                    self.frames.remove(page_id);
+                    evicted += 1;
+                }
+            } else {
+                self.frames.remove(page_id);
+                evicted += 1;
+            }
+        }
     }
 
     pub fn unpin_page(&mut self, page_id: u64, is_dirty: bool) {
@@ -124,5 +131,16 @@ impl BufferPool {
                 }
             }
         }
+    }
+
+    pub fn flush_page(&mut self, page_id: u64, disk: &impl DiskManager) -> Result<()> {
+        if let Some(frame) = self.frames.get(&page_id) {
+            if frame.is_dirty() {
+                let page = frame.read_page();
+                disk.write_page(&page)?;
+                frame.set_dirty(false);
+            }
+        }
+        Ok(())
     }
 }

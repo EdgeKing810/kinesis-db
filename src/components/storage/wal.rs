@@ -27,12 +27,14 @@ pub struct WalEntry {
 }
 
 impl WriteAheadLog {
-    pub fn new(path: &str) -> Self {
-        OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .unwrap();
+    pub fn new(path: &str, create_file: bool) -> Self {
+        if create_file {
+            OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .unwrap();
+        }
         WriteAheadLog {
             path: path.to_string(),
         }

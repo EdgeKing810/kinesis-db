@@ -27,7 +27,7 @@ pub struct DBEngine {
     file_path: String,                   // Path to the disk file
     wal: WriteAheadLog,                  // // The Path to the Write Ahead Log
     tx_manager: TransactionManager,      // The transaction manager
-    page_store: PageStore,               // The page store
+    page_store: Option<PageStore>,       // The page store
     buffer_pool: Arc<Mutex<BufferPool>>, // The buffer pool
     restore_policy: RestorePolicy,       // The restore policy for the WAL
     isolation_level: IsolationLevel,     // The default isolation level
@@ -45,7 +45,7 @@ impl DBEngine {
         // Set buffer pool size based on database type
         let buffer_pool_size = match db_type {
             DatabaseType::InMemory => 10000, // Larger in-memory buffer
-            DatabaseType::Hybrid => 1000,    // Medium buffer for hybrid
+            DatabaseType::Hybrid => 2500,    // Increased from 1000 to 2500
             DatabaseType::OnDisk => 100,     // Smaller buffer for disk-based
         };
 
@@ -57,9 +57,13 @@ impl DBEngine {
         let mut engine = DBEngine {
             db: Arc::new(RwLock::new(db)),
             file_path: file_path.to_string(),
-            wal: WriteAheadLog::new(wal_path),
+            wal: WriteAheadLog::new(wal_path, db_type != DatabaseType::InMemory),
             tx_manager: TransactionManager::new(tx_config),
-            page_store: PageStore::new(&format!("{}.pages", file_path)).unwrap(),
+            page_store: if db_type != DatabaseType::InMemory {
+                Some(PageStore::new(&format!("{}.pages", file_path)).unwrap())
+            } else {
+                None
+            },
             buffer_pool: Arc::new(Mutex::new(BufferPool::new(buffer_pool_size, db_type))),
             restore_policy,
             isolation_level,
@@ -352,7 +356,9 @@ impl DBEngine {
 
         // Free the collected pages
         for page_id in pages_to_free {
-            self.page_store.free_page(page_id);
+            if let Some(page_store) = &self.page_store {
+                page_store.free_page(page_id);
+            }
         }
 
         // Handle remaining changes
@@ -379,26 +385,32 @@ impl DBEngine {
 
     fn get_table_page_ids(&self, table_name: &str) -> Option<Vec<u64>> {
         // Load TOC and get page IDs for the table
-        let mut buffer_pool = self.buffer_pool.lock().unwrap();
-        let toc_frame = buffer_pool.get_page(0, &self.page_store);
-        let toc = toc_frame.get_page().read().unwrap();
-        let table_locations: HashMap<String, Vec<u64>> =
-            bincode::deserialize(&toc.data).unwrap_or_default();
-        table_locations.get(table_name).cloned()
+        if let Some(page_store) = &self.page_store {
+            let mut buffer_pool = self.buffer_pool.lock().unwrap();
+            let toc_frame = buffer_pool.get_page(0, page_store);
+            let toc = toc_frame.get_page().read().unwrap();
+            let table_locations: HashMap<String, Vec<u64>> =
+                bincode::deserialize(&toc.data).unwrap_or_default();
+            table_locations.get(table_name).cloned()
+        } else {
+            None
+        }
     }
 
     fn get_record_page_id(&self, table_name: &str, record_id: u64) -> Option<u64> {
         // Load TOC and get page IDs for the table
         if let Some(page_ids) = self.get_table_page_ids(table_name) {
-            let mut buffer_pool = self.buffer_pool.lock().unwrap();
-            for page_id in page_ids {
-                // Load the page and check for the record
-                let frame = buffer_pool.get_page(page_id, &self.page_store);
-                let page_data = frame.get_page().read().unwrap(); // Updated this line
-                let records: Vec<Record> =
-                    bincode::deserialize(&page_data.data).unwrap_or_default();
-                if records.iter().any(|r| r.id == record_id) {
-                    return Some(page_id);
+            if let Some(page_store) = &self.page_store {
+                let mut buffer_pool = self.buffer_pool.lock().unwrap();
+                for page_id in page_ids {
+                    // Load the page and check for the record
+                    let frame = buffer_pool.get_page(page_id, page_store);
+                    let page_data = frame.get_page().read().unwrap(); // Updated this line
+                    let records: Vec<Record> =
+                        bincode::deserialize(&page_data.data).unwrap_or_default();
+                    if records.iter().any(|r| r.id == record_id) {
+                        return Some(page_id);
+                    }
                 }
             }
         }
@@ -644,8 +656,13 @@ impl DBEngine {
         let mut buffer_pool = self.buffer_pool.lock().unwrap();
         let mut db_lock = self.db.write().unwrap();
 
+        let page_store = match &self.page_store {
+            Some(store) => store,
+            None => return,
+        };
+
         // Read TOC
-        let toc_frame = buffer_pool.get_page(0, &self.page_store);
+        let toc_frame = buffer_pool.get_page(0, page_store);
         let table_locations: HashMap<String, Vec<u64>> = {
             let toc = toc_frame.get_page().read().unwrap();
             bincode::deserialize(&toc.data).unwrap_or_default()
@@ -655,36 +672,42 @@ impl DBEngine {
         // Load each table
         for (table_name, page_ids) in table_locations {
             let mut table = Table::new();
-            let mut current_batch = Vec::new();
-            const BATCH_SIZE: usize = PAGE_SIZE * 4; // Read 4 pages worth of data at a time
+            let mut all_records = Vec::new();
 
-            for &page_id in &page_ids {
-                let frame = buffer_pool.get_page(page_id, &self.page_store);
+            // Process pages in order
+            for page_id in &page_ids {
+                let frame = buffer_pool.get_page(*page_id, page_store);
                 let page = frame.get_page().read().unwrap();
-                current_batch.extend_from_slice(&page.data);
-                buffer_pool.unpin_page(page_id, false);
 
-                // Process batch when it gets large enough
-                if current_batch.len() >= BATCH_SIZE {
-                    if let Ok(records) = bincode::deserialize::<Vec<Record>>(&current_batch) {
-                        for record in records {
-                            table.insert_record(record);
+                // Read chunk size from start of page
+                let size =
+                    u32::from_le_bytes([page.data[0], page.data[1], page.data[2], page.data[3]])
+                        as usize;
+
+                if size > 0 && size <= page.data.len() - 4 {
+                    // Deserialize chunk
+                    match bincode::deserialize::<Vec<Record>>(&page.data[4..4 + size]) {
+                        Ok(mut records) => all_records.append(&mut records),
+                        Err(e) => {
+                            eprintln!(
+                                "Warning: Failed to deserialize chunk in table {}: {}",
+                                table_name, e
+                            );
+                            continue;
                         }
                     }
-                    current_batch.clear();
                 }
+                buffer_pool.unpin_page(*page_id, false);
             }
 
-            // Process any remaining data
-            if !current_batch.is_empty() {
-                if let Ok(records) = bincode::deserialize::<Vec<Record>>(&current_batch) {
-                    for record in records {
-                        table.insert_record(record);
-                    }
-                }
+            // Insert all records into table
+            for record in all_records {
+                table.insert_record(record);
             }
 
-            db_lock.tables.insert(table_name, table);
+            if !table.data.is_empty() {
+                db_lock.tables.insert(table_name, table);
+            }
         }
     }
 
@@ -697,11 +720,16 @@ impl DBEngine {
             return Ok(checksum);
         }
 
-        let mut buffer_pool = self.buffer_pool.lock().unwrap();
-        let mut table_locations = HashMap::new();
+        let page_store = match &self.page_store {
+            Some(store) => store,
+            None => return Ok(self.calculate_checksum(&*db_lock)?),
+        };
 
-        // Chunk size that balances memory usage and performance
-        const BATCH_SIZE: usize = 1000;
+        let mut buffer_pool = self.buffer_pool.lock().unwrap();
+        buffer_pool.flush_all(page_store); // Flush existing pages first
+
+        let mut table_locations = HashMap::new();
+        const MAX_DATA_PER_PAGE: usize = PAGE_SIZE - 64; // Increased usable space
 
         for (table_name, table) in &db_lock.tables {
             let mut page_ids = Vec::new();
@@ -711,31 +739,43 @@ impl DBEngine {
                 .map(|r| r.read().unwrap().clone())
                 .collect();
 
-            // Process records in batches to manage memory usage
-            for chunk in records.chunks(BATCH_SIZE) {
-                let serialized = bincode::serialize(chunk)
-                    .map_err(|e| format!("Failed to serialize records: {}", e))?;
+            // Serialize records in chunks to avoid large allocations
+            const CHUNK_SIZE: usize = 100;
+            for chunk in records.chunks(CHUNK_SIZE) {
+                // Serialize chunk
+                let chunk_data = bincode::serialize(&chunk)
+                    .map_err(|e| format!("Failed to serialize chunk: {}", e))?;
 
-                let mut current_data = serialized;
+                // Calculate needed pages
+                let pages_needed = (chunk_data.len() + MAX_DATA_PER_PAGE - 1) / MAX_DATA_PER_PAGE;
 
-                while !current_data.is_empty() {
-                    let page_id = self
-                        .page_store
+                // Write chunk data across pages
+                for i in 0..pages_needed {
+                    let start = i * MAX_DATA_PER_PAGE;
+                    let end = (start + MAX_DATA_PER_PAGE).min(chunk_data.len());
+                    let page_chunk = &chunk_data[start..end];
+
+                    let page_id = page_store
                         .allocate_page()
                         .map_err(|e| format!("Failed to allocate page: {}", e))?;
-                    page_ids.push(page_id);
 
-                    let frame = buffer_pool.get_page(page_id, &self.page_store);
-                    let remaining = {
+                    let frame = buffer_pool.get_page(page_id, page_store);
+                    {
                         let mut page = frame.get_page().write().unwrap();
-                        let result = page
-                            .write_data(0, &current_data)
-                            .map_err(|e| format!("Failed to write data: {}", e))?;
-                        buffer_pool.unpin_page(page_id, true);
-                        result
-                    };
+                        page.data.fill(0);
 
-                    current_data = remaining.unwrap_or_default();
+                        // Write chunk size at start of page
+                        let size_bytes = (page_chunk.len() as u32).to_le_bytes();
+                        page.data[..4].copy_from_slice(&size_bytes);
+
+                        // Write chunk data after size
+                        page.data[4..4 + page_chunk.len()].copy_from_slice(page_chunk);
+                    }
+                    buffer_pool.unpin_page(page_id, true);
+                    buffer_pool
+                        .flush_page(page_id, page_store)
+                        .map_err(|e| format!("Failed to flush page {}: {}", page_id, e))?;
+                    page_ids.push(page_id);
                 }
             }
 
@@ -745,18 +785,26 @@ impl DBEngine {
         }
 
         // Write table of contents
-        let toc_frame = buffer_pool.get_page(0, &self.page_store);
-        {
-            let serialized = bincode::serialize(&table_locations)
-                .map_err(|e| format!("Failed to serialize TOC: {}", e))?;
+        let toc_data = bincode::serialize(&table_locations)
+            .map_err(|e| format!("Failed to serialize TOC: {}", e))?;
 
+        let toc_frame = buffer_pool.get_page(0, page_store);
+        {
             let mut toc = toc_frame.get_page().write().unwrap();
-            toc.write_data(0, &serialized)
+            toc.data.fill(0);
+            toc.write_data(0, &toc_data)
                 .map_err(|e| format!("Failed to write TOC: {}", e))?;
         }
-
         buffer_pool.unpin_page(0, true);
-        buffer_pool.flush_all(&self.page_store);
+        buffer_pool
+            .flush_page(0, page_store)
+            .map_err(|e| format!("Failed to flush TOC: {}", e))?;
+
+        // Final sync to ensure all data is written
+        buffer_pool.flush_all(page_store);
+        page_store
+            .sync()
+            .map_err(|e| format!("Failed to sync disk: {}", e))?;
 
         let checksum = self.calculate_checksum(&*db_lock)?;
         Ok(checksum)

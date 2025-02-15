@@ -44,6 +44,11 @@ impl PageStore {
     pub fn free_page(&self, page_id: u64) {
         self.free_pages.lock().unwrap().push(page_id);
     }
+
+    pub fn sync(&self) -> Result<()> {
+        let file = self.file.lock().unwrap();
+        file.sync_all()
+    }
 }
 
 // Implement DiskManager trait for PageStore
