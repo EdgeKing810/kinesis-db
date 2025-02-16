@@ -15,7 +15,9 @@ fn test_wal_recovery() {
     engine.commit(tx).unwrap();
 
     let mut tx = engine.begin_transaction();
-    engine.insert_record(&mut tx, "test_table", create_test_record(1, "Test")).unwrap();
+    engine
+        .insert_record(&mut tx, "test_table", create_test_record(1, "Test"))
+        .unwrap();
     engine.commit(tx).unwrap();
 
     // Force a new engine instance to test recovery
@@ -39,11 +41,13 @@ fn test_wal_rotation() {
     for i in 0..150 {
         // More than rotation threshold
         let mut tx = engine.begin_transaction();
-        engine.insert_record(
-            &mut tx,
-            "test_table",
-            create_test_record(i, &format!("Test{}", i)),
-        ).unwrap();
+        engine
+            .insert_record(
+                &mut tx,
+                "test_table",
+                create_test_record(i, &format!("Test{}", i)),
+            )
+            .unwrap();
         engine.commit(tx).unwrap();
     }
 

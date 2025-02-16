@@ -15,7 +15,9 @@ fn test_rollback_record_operations() {
 
     // Test insert rollback
     let mut tx = engine.begin_transaction();
-    engine.insert_record(&mut tx, "test_table", create_test_record(1, "Test1")).unwrap();
+    engine
+        .insert_record(&mut tx, "test_table", create_test_record(1, "Test1"))
+        .unwrap();
     engine.rollback(tx).unwrap();
 
     // Verify insert was rolled back
@@ -25,18 +27,25 @@ fn test_rollback_record_operations() {
 
     // Test update rollback
     let mut tx = engine.begin_transaction();
-    engine.insert_record(&mut tx, "test_table", create_test_record(1, "Test1")).unwrap();
+    engine
+        .insert_record(&mut tx, "test_table", create_test_record(1, "Test1"))
+        .unwrap();
     engine.commit(tx).unwrap();
 
     let mut tx = engine.begin_transaction();
     engine.delete_record(&mut tx, "test_table", 1);
-    engine.insert_record(&mut tx, "test_table", create_test_record(1, "Updated")).unwrap();
+    engine
+        .insert_record(&mut tx, "test_table", create_test_record(1, "Updated"))
+        .unwrap();
     engine.rollback(tx).unwrap();
 
     // Verify update was rolled back
     let mut tx = engine.begin_transaction();
     let record = engine.get_record(&mut tx, "test_table", 1).unwrap();
-    assert_eq!(*record.get_field("name").unwrap(), ValueType::Str("Test1".to_string()));
+    assert_eq!(
+        *record.get_field("name").unwrap(),
+        ValueType::Str("Test1".to_string())
+    );
     engine.commit(tx).unwrap();
 }
 

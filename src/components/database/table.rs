@@ -3,13 +3,10 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use serde::{
-    ser::SerializeMap,
-    Deserialize, Deserializer, Serialize, Serializer,
-};
+use serde::{ser::SerializeMap, Deserialize, Deserializer, Serialize, Serializer};
 
-use super::{record::Record, value_type::ValueType};
 use super::schema::TableSchema;
+use super::{record::Record, value_type::ValueType};
 
 #[derive(Debug, Clone)]
 pub struct Table {
@@ -26,7 +23,8 @@ impl Serialize for Table {
         let mut map = serializer.serialize_map(None)?;
         map.serialize_entry("schema", &self.schema)?;
         // Convert to regular records for serialization
-        let records: BTreeMap<u64, Record> = self.data
+        let records: BTreeMap<u64, Record> = self
+            .data
             .iter()
             .map(|(k, v)| (*k, v.read().unwrap().clone()))
             .collect();
@@ -48,9 +46,10 @@ impl<'de> Deserialize<'de> for Table {
         }
 
         let TableData { schema, data } = TableData::deserialize(deserializer)?;
-        
+
         Ok(Table {
-            data: data.into_iter()
+            data: data
+                .into_iter()
                 .map(|(k, v)| (k, Arc::new(RwLock::new(v))))
                 .collect(),
             schema,

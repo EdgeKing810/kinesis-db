@@ -35,36 +35,189 @@ fn main() {
 
     // Create table schemas
     let mut fields = HashMap::new();
-    fields.insert("name".to_string(), FieldConstraint {field_type: FieldType::String, required: true, min: None, max: None, pattern: None});
-    fields.insert("age".to_string(), FieldConstraint {field_type: FieldType::Integer, required: true, min: None, max: None, pattern: None});
-    fields.insert("role".to_string(), FieldConstraint {field_type: FieldType::String, required: true, min: None, max: None, pattern: None});
-    fields.insert("salary".to_string(), FieldConstraint {field_type: FieldType::Float, required: true, min: None, max: None, pattern: None});
-    fields.insert("senior".to_string(), FieldConstraint {field_type: FieldType::Boolean, required: true, min: None, max: None, pattern: None});
-    fields.insert("department".to_string(), FieldConstraint {field_type: FieldType::String, required: true, min: None, max: None, pattern: None});
-    fields.insert("work_mode".to_string(), FieldConstraint {field_type: FieldType::String, required: true, min: None, max: None, pattern: None});
-    
+    fields.insert(
+        "name".to_string(),
+        FieldConstraint {
+            field_type: FieldType::String,
+            required: true,
+            min: None,
+            max: None,
+            pattern: None,
+        },
+    );
+    fields.insert(
+        "age".to_string(),
+        FieldConstraint {
+            field_type: FieldType::Integer,
+            required: true,
+            min: None,
+            max: None,
+            pattern: None,
+        },
+    );
+    fields.insert(
+        "role".to_string(),
+        FieldConstraint {
+            field_type: FieldType::String,
+            required: true,
+            min: None,
+            max: None,
+            pattern: None,
+        },
+    );
+    fields.insert(
+        "salary".to_string(),
+        FieldConstraint {
+            field_type: FieldType::Float,
+            required: true,
+            min: None,
+            max: None,
+            pattern: None,
+        },
+    );
+    fields.insert(
+        "senior".to_string(),
+        FieldConstraint {
+            field_type: FieldType::Boolean,
+            required: true,
+            min: None,
+            max: None,
+            pattern: None,
+        },
+    );
+    fields.insert(
+        "department".to_string(),
+        FieldConstraint {
+            field_type: FieldType::String,
+            required: true,
+            min: None,
+            max: None,
+            pattern: None,
+        },
+    );
+    fields.insert(
+        "work_mode".to_string(),
+        FieldConstraint {
+            field_type: FieldType::String,
+            required: true,
+            min: None,
+            max: None,
+            pattern: None,
+        },
+    );
+
     let users_schema = TableSchema {
         name: "users".to_string(),
         fields,
     };
 
     let mut fields = HashMap::new();
-    fields.insert("name".to_string(), FieldConstraint {field_type: FieldType::String, required: true, min: None, max: None, pattern: None});
-    fields.insert("species".to_string(), FieldConstraint {field_type: FieldType::String, required: true, min: None, max: None, pattern: None});
-    fields.insert("age".to_string(), FieldConstraint {field_type: FieldType::Integer, required: true, min: None, max: None, pattern: None});
-    fields.insert("weight".to_string(), FieldConstraint {field_type: FieldType::Float, required: true, min: None, max: None, pattern: None});
-    fields.insert("vaccinated".to_string(), FieldConstraint {field_type: FieldType::Boolean, required: true, min: None, max: None, pattern: None});
-    fields.insert("breed".to_string(), FieldConstraint {field_type: FieldType::String, required: true, min: None, max: None, pattern: None});
-    fields.insert("temperament".to_string(), FieldConstraint {field_type: FieldType::String, required: true, min: None, max: None, pattern: None});
-    fields.insert("size".to_string(), FieldConstraint {field_type: FieldType::String, required: true, min: None, max: None, pattern: None});
-    fields.insert("house_trained".to_string(), FieldConstraint {field_type: FieldType::Boolean, required: true, min: None, max: None, pattern: None});
-    fields.insert("origin".to_string(), FieldConstraint {field_type: FieldType::String, required: true, min: None, max: None, pattern: None});
+    fields.insert(
+        "name".to_string(),
+        FieldConstraint {
+            field_type: FieldType::String,
+            required: true,
+            min: None,
+            max: None,
+            pattern: None,
+        },
+    );
+    fields.insert(
+        "species".to_string(),
+        FieldConstraint {
+            field_type: FieldType::String,
+            required: true,
+            min: None,
+            max: None,
+            pattern: None,
+        },
+    );
+    fields.insert(
+        "age".to_string(),
+        FieldConstraint {
+            field_type: FieldType::Integer,
+            required: true,
+            min: None,
+            max: None,
+            pattern: None,
+        },
+    );
+    fields.insert(
+        "weight".to_string(),
+        FieldConstraint {
+            field_type: FieldType::Float,
+            required: true,
+            min: None,
+            max: None,
+            pattern: None,
+        },
+    );
+    fields.insert(
+        "vaccinated".to_string(),
+        FieldConstraint {
+            field_type: FieldType::Boolean,
+            required: true,
+            min: None,
+            max: None,
+            pattern: None,
+        },
+    );
+    fields.insert(
+        "breed".to_string(),
+        FieldConstraint {
+            field_type: FieldType::String,
+            required: true,
+            min: None,
+            max: None,
+            pattern: None,
+        },
+    );
+    fields.insert(
+        "temperament".to_string(),
+        FieldConstraint {
+            field_type: FieldType::String,
+            required: true,
+            min: None,
+            max: None,
+            pattern: None,
+        },
+    );
+    fields.insert(
+        "size".to_string(),
+        FieldConstraint {
+            field_type: FieldType::String,
+            required: true,
+            min: None,
+            max: None,
+            pattern: None,
+        },
+    );
+    fields.insert(
+        "house_trained".to_string(),
+        FieldConstraint {
+            field_type: FieldType::Boolean,
+            required: true,
+            min: None,
+            max: None,
+            pattern: None,
+        },
+    );
+    fields.insert(
+        "origin".to_string(),
+        FieldConstraint {
+            field_type: FieldType::String,
+            required: true,
+            min: None,
+            max: None,
+            pattern: None,
+        },
+    );
 
     let animals_schema = TableSchema {
         name: "animals".to_string(),
         fields,
     };
-    
+
     // Create tables
     let mut tx = engine.begin_transaction();
     engine.create_table_with_schema(&mut tx, "users", users_schema);
@@ -366,8 +519,9 @@ fn main() {
     promoted_user_record.set_field("department", ValueType::Str("Analytics".to_string()));
     promoted_user_record.set_field("work_mode", ValueType::Str("Hybrid".to_string()));
 
-
-    engine.insert_record(&mut tx, "users", promoted_user_record).unwrap();
+    engine
+        .insert_record(&mut tx, "users", promoted_user_record)
+        .unwrap();
 
     // Update animal training status
     engine.delete_record(&mut tx, "animals", 6);
@@ -383,7 +537,9 @@ fn main() {
     trained_cat_record.set_field("house_trained", ValueType::Bool(true));
     trained_cat_record.set_field("origin", ValueType::Str("Thailand".to_string()));
 
-    engine.insert_record(&mut tx, "animals", trained_cat_record).unwrap();
+    engine
+        .insert_record(&mut tx, "animals", trained_cat_record)
+        .unwrap();
     engine.commit(tx).unwrap();
     println!("✅ Updates completed successfully");
 

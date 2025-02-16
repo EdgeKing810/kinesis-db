@@ -41,11 +41,13 @@ fn test_concurrent_operations() {
 
                     for i in 0..records_per_thread {
                         let mut record = Record::new((start_id + i) as u64);
-                        record.set_field("data", ValueType::Str(format!(
-                            "Thread {} Record {}",
-                            thread_id, i
-                        )));
-                        engine_guard.insert_record(&mut tx, "test_table", record).unwrap();
+                        record.set_field(
+                            "data",
+                            ValueType::Str(format!("Thread {} Record {}", thread_id, i)),
+                        );
+                        engine_guard
+                            .insert_record(&mut tx, "test_table", record)
+                            .unwrap();
                     }
 
                     engine_guard.commit(tx).unwrap();
@@ -133,7 +135,9 @@ fn test_concurrent_large_data() {
                     let mut record = Record::new(thread_id as u64);
                     record.set_field("data", ValueType::Str(large_data.clone()));
 
-                    engine_guard.insert_record(&mut tx, "large_data", record).unwrap();
+                    engine_guard
+                        .insert_record(&mut tx, "large_data", record)
+                        .unwrap();
                     engine_guard.commit(tx).unwrap();
                 }
 

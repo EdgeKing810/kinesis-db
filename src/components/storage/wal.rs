@@ -89,7 +89,8 @@ impl WriteAheadLog {
                 if let Some(creates) = entry["table_creates"].as_array() {
                     for create in creates {
                         let table = create[0].as_str().unwrap();
-                        let schema: TableSchema = serde_json::from_value(create[1].clone()).unwrap();
+                        let schema: TableSchema =
+                            serde_json::from_value(create[1].clone()).unwrap();
                         tx.pending_table_creates.push((table.to_string(), schema));
                     }
                 }

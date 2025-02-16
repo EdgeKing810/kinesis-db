@@ -85,8 +85,8 @@ pub fn setup_test_db_dirty(test_id: &str, isolation_level: IsolationLevel) -> DB
 }
 
 pub fn create_test_record(id: u64, name: &str) -> Record {
-  let mut record = Record::new(id);
-  record.set_field("name", ValueType::Str(name.to_string()));
+    let mut record = Record::new(id);
+    record.set_field("name", ValueType::Str(name.to_string()));
     record.set_field("age", ValueType::Int(30));
     record.set_field("active", ValueType::Bool(true));
 

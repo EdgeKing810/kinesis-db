@@ -68,7 +68,9 @@ fn test_ondisk_database() {
     let mut record = Record::new(1);
     record.set_field("data", ValueType::Str("test data".to_string()));
 
-    engine.insert_record(&mut tx, "test_table", record.clone()).unwrap();
+    engine
+        .insert_record(&mut tx, "test_table", record.clone())
+        .unwrap();
     engine.commit(tx).unwrap();
 
     // Drop engine and create new one - data should persist
@@ -81,7 +83,8 @@ fn test_ondisk_database() {
         .expect("OnDisk database should persist data");
 
     assert_eq!(
-        loaded_record.get_field("data"), record.get_field("data"),
+        loaded_record.get_field("data"),
+        record.get_field("data"),
         "Loaded record should match original"
     );
 }
@@ -231,11 +234,9 @@ fn test_hybrid_mode_behavior() {
         // Exceed buffer pool size
         let mut record = Record::new(i);
         record.set_field("integer", ValueType::Int(i as i64));
-        engine.insert_record(
-            &mut tx,
-            "memory_table",
-            record
-        ).unwrap();
+        engine
+            .insert_record(&mut tx, "memory_table", record)
+            .unwrap();
     }
 
     engine.commit(tx).unwrap();
@@ -258,11 +259,7 @@ fn test_inmemory_no_persistence() {
     let mut tx = engine.begin_transaction();
     let mut record = Record::new(1);
     record.set_field("data", ValueType::Str("test data".to_string()));
-    engine.insert_record(
-        &mut tx,
-        "test_table",
-        record
-    ).unwrap();
+    engine.insert_record(&mut tx, "test_table", record).unwrap();
     engine.commit(tx).unwrap();
     drop(engine);
 
@@ -291,11 +288,7 @@ fn test_ondisk_buffer_eviction() {
         // Exceed buffer pool size
         let mut record = Record::new(i);
         record.set_field("data", ValueType::Int(i as i64));
-        engine.insert_record(
-            &mut tx,
-            "test_table",
-            record
-        ).unwrap();
+        engine.insert_record(&mut tx, "test_table", record).unwrap();
     }
 
     engine.commit(tx).unwrap();
@@ -347,11 +340,7 @@ fn test_recovery_by_database_type() {
         let mut tx = engine.begin_transaction();
         let mut record = Record::new(1);
         record.set_field("data", ValueType::Str("test data".to_string()));
-        engine.insert_record(
-            &mut tx,
-            "test_table",
-            record
-        ).unwrap();
+        engine.insert_record(&mut tx, "test_table", record).unwrap();
         engine.commit(tx).unwrap();
 
         // Simulate crash
@@ -399,7 +388,10 @@ fn test_concurrent_bulk_operations() {
 
                     for i in 0..RECORDS_PER_THREAD {
                         let mut record = Record::new((start_id + i) as u64);
-                        record.set_field("data", ValueType::Str(format!("Data from thread {}", thread_id)));
+                        record.set_field(
+                            "data",
+                            ValueType::Str(format!("Data from thread {}", thread_id)),
+                        );
                         engine.insert_record(&mut tx, "test_table", record).unwrap();
                     }
                     engine.commit(tx).unwrap();

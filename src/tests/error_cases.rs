@@ -11,7 +11,9 @@ fn test_invalid_table_operations() {
 
     // Try to insert into non-existent table
     let record = create_test_record(1, "Test");
-    assert!(engine.insert_record(&mut tx, "nonexistent_table", record).is_err());
+    assert!(engine
+        .insert_record(&mut tx, "nonexistent_table", record)
+        .is_err());
 }
 
 #[test]
@@ -25,8 +27,12 @@ fn test_deadlock_detection() {
 
     // Create initial records
     let mut tx = engine.begin_transaction();
-    engine.insert_record(&mut tx, "test_table", create_test_record(1, "Test1")).unwrap();
-    engine.insert_record(&mut tx, "test_table", create_test_record(2, "Test2")).unwrap();
+    engine
+        .insert_record(&mut tx, "test_table", create_test_record(1, "Test1"))
+        .unwrap();
+    engine
+        .insert_record(&mut tx, "test_table", create_test_record(2, "Test2"))
+        .unwrap();
     engine.commit(tx).unwrap();
 
     // Start two concurrent transactions

@@ -1,7 +1,7 @@
+use super::value_type::ValueType;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use regex::Regex;
-use super::value_type::ValueType;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FieldType {
@@ -102,7 +102,10 @@ impl FieldConstraint {
 }
 
 impl TableSchema {
-    pub fn validate_record(&self, values: &HashMap<String, super::value_type::ValueType>) -> Result<(), String> {
+    pub fn validate_record(
+        &self,
+        values: &HashMap<String, super::value_type::ValueType>,
+    ) -> Result<(), String> {
         // First check for unknown fields
         for field_name in values.keys() {
             if !self.fields.contains_key(field_name) && self.fields.len() > 0 {

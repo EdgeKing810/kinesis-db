@@ -2,7 +2,13 @@
 use std::collections::HashMap;
 
 use crate::{
-    components::database::{record::Record, schema::{FieldConstraint, FieldType, TableSchema}, value_type::ValueType}, tests::{create_test_record, setup_test_db}, IsolationLevel
+    components::database::{
+        record::Record,
+        schema::{FieldConstraint, FieldType, TableSchema},
+        value_type::ValueType,
+    },
+    tests::{create_test_record, setup_test_db},
+    IsolationLevel,
 };
 
 #[test]
@@ -78,7 +84,7 @@ fn test_schema_validation() {
             required: true,
             min: None,
             max: None,
-            pattern: None
+            pattern: None,
         },
     );
 
@@ -96,7 +102,7 @@ fn test_schema_validation() {
     let mut record = Record::new(1);
     record.set_field("username", ValueType::Str("john_doe".to_string()));
     record.set_field("age", ValueType::Int(25));
-    
+
     assert!(engine.insert_record(&mut tx, "users", record).is_ok());
     engine.commit(tx).unwrap();
 
@@ -105,7 +111,7 @@ fn test_schema_validation() {
     let mut record = Record::new(2);
     record.set_field("username", ValueType::Str("ab".to_string()));
     record.set_field("age", ValueType::Int(25));
-    
+
     assert!(engine.insert_record(&mut tx, "users", record).is_err());
 }
 
@@ -122,7 +128,7 @@ fn test_required_fields_validation() {
             required: true,
             min: None,
             max: None,
-            pattern: None
+            pattern: None,
         },
     );
     fields.insert(
@@ -132,7 +138,7 @@ fn test_required_fields_validation() {
             required: false, // Optional field
             min: Some(0.0),
             max: Some(150.0),
-            pattern: None
+            pattern: None,
         },
     );
 
@@ -149,7 +155,7 @@ fn test_required_fields_validation() {
     let mut tx = engine.begin_transaction();
     let mut record = Record::new(1);
     record.set_field("age", ValueType::Int(25));
-    
+
     assert!(
         engine.insert_record(&mut tx, "users", record).is_err(),
         "Should fail when required field 'username' is missing"
@@ -160,7 +166,7 @@ fn test_required_fields_validation() {
     let mut record = Record::new(2);
     record.set_field("username", ValueType::Str("john".to_string()));
     record.set_field("unknown_field", ValueType::Int(42));
-    
+
     assert!(
         engine.insert_record(&mut tx, "users", record).is_err(),
         "Should fail when unknown field is present"
@@ -170,7 +176,7 @@ fn test_required_fields_validation() {
     let mut tx = engine.begin_transaction();
     let mut record = Record::new(3);
     record.set_field("username", ValueType::Str("john".to_string()));
-    
+
     assert!(
         engine.insert_record(&mut tx, "users", record).is_ok(),
         "Should succeed with only required fields"
@@ -190,7 +196,7 @@ fn test_field_type_validation() {
             required: true,
             min: None,
             max: None,
-            pattern: None
+            pattern: None,
         },
     );
     fields.insert(
@@ -200,7 +206,7 @@ fn test_field_type_validation() {
             required: true,
             min: Some(0.0),
             max: Some(100.0),
-            pattern: None
+            pattern: None,
         },
     );
 
@@ -217,7 +223,7 @@ fn test_field_type_validation() {
     let mut record = Record::new(1);
     record.set_field("string_field", ValueType::Str("valid".to_string()));
     record.set_field("int_field", ValueType::Str("invalid".to_string()));
-    
+
     assert!(
         engine.insert_record(&mut tx, "test_types", record).is_err(),
         "Should fail when field type doesn't match schema type"
@@ -228,7 +234,7 @@ fn test_field_type_validation() {
     let mut record = Record::new(2);
     record.set_field("string_field", ValueType::Int(42));
     record.set_field("int_field", ValueType::Int(42));
-    
+
     assert!(
         engine.insert_record(&mut tx, "test_types", record).is_err(),
         "Should fail when field type doesn't match schema type"
@@ -239,7 +245,7 @@ fn test_field_type_validation() {
     let mut record = Record::new(3);
     record.set_field("string_field", ValueType::Str("valid".to_string()));
     record.set_field("int_field", ValueType::Int(42));
-    
+
     assert!(
         engine.insert_record(&mut tx, "test_types", record).is_ok(),
         "Should succeed when field types match schema types"

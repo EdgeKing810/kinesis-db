@@ -15,7 +15,9 @@ fn test_read_committed_isolation() {
 
     // First transaction: Insert and delete records
     let mut tx1 = engine.begin_transaction();
-    engine.insert_record(&mut tx1, "test_table", create_test_record(1, "Initial")).unwrap();
+    engine
+        .insert_record(&mut tx1, "test_table", create_test_record(1, "Initial"))
+        .unwrap();
 
     // Second transaction: Should not see uncommitted changes
     let mut tx2 = engine.begin_transaction();
@@ -34,7 +36,9 @@ fn test_read_committed_isolation() {
     // Third transaction: Delete and reinsert record
     let mut tx3 = engine.begin_transaction();
     engine.delete_record(&mut tx3, "test_table", 1);
-    engine.insert_record(&mut tx3, "test_table", create_test_record(1, "Modified")).unwrap();
+    engine
+        .insert_record(&mut tx3, "test_table", create_test_record(1, "Modified"))
+        .unwrap();
     engine.commit(tx3).unwrap();
 
     // T2 should see the new version (non-repeatable read allowed)
@@ -57,7 +61,9 @@ fn test_repeatable_read_isolation() {
     engine.commit(tx).unwrap();
 
     let mut tx = engine.begin_transaction();
-    engine.insert_record(&mut tx, "test_table", create_test_record(1, "Initial")).unwrap();
+    engine
+        .insert_record(&mut tx, "test_table", create_test_record(1, "Initial"))
+        .unwrap();
     engine.commit(tx).unwrap();
 
     // Transaction 1: First read
@@ -67,7 +73,9 @@ fn test_repeatable_read_isolation() {
     // Transaction 2: Modify data
     let mut tx2 = engine.begin_transaction();
     engine.delete_record(&mut tx2, "test_table", 1);
-    engine.insert_record(&mut tx2, "test_table", create_test_record(1, "Modified")).unwrap();
+    engine
+        .insert_record(&mut tx2, "test_table", create_test_record(1, "Modified"))
+        .unwrap();
     engine.commit(tx2).unwrap();
 
     // T1 should still see the original data (repeatable read guaranteed)
@@ -79,7 +87,9 @@ fn test_repeatable_read_isolation() {
 
     // Test that phantom reads are also prevented in Repeatable Read
     let mut tx3 = engine.begin_transaction();
-    engine.insert_record(&mut tx3, "test_table", create_test_record(2, "Phantom")).unwrap();
+    engine
+        .insert_record(&mut tx3, "test_table", create_test_record(2, "Phantom"))
+        .unwrap();
     engine.commit(tx3).unwrap();
 
     // T1 should NOT see the new record (phantom reads prevented)
@@ -102,11 +112,15 @@ fn test_serializable_isolation() {
 
     // First transaction
     let mut tx1 = engine.begin_transaction();
-    engine.insert_record(&mut tx1, "test_table", create_test_record(1, "Test")).unwrap();
+    engine
+        .insert_record(&mut tx1, "test_table", create_test_record(1, "Test"))
+        .unwrap();
 
     // Second transaction trying to modify same record
     let mut tx2 = engine.begin_transaction();
-    engine.insert_record(&mut tx2, "test_table", create_test_record(1, "Test2")).unwrap();
+    engine
+        .insert_record(&mut tx2, "test_table", create_test_record(1, "Test2"))
+        .unwrap();
 
     // First transaction should succeed
     assert!(engine.commit(tx1).is_ok());

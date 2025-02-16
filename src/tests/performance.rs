@@ -18,11 +18,13 @@ fn test_bulk_operations() {
     // Insert 2500 records
     let mut tx = engine.begin_transaction();
     for i in 0..2500 {
-        engine.insert_record(
-            &mut tx,
-            "test_table",
-            create_test_record(i, &format!("Test{}", i)),
-        ).unwrap();
+        engine
+            .insert_record(
+                &mut tx,
+                "test_table",
+                create_test_record(i, &format!("Test{}", i)),
+            )
+            .unwrap();
     }
     engine.commit(tx).unwrap();
 
