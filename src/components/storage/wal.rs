@@ -8,7 +8,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::components::{
-    database::{record::Record, restore_policy::RestorePolicy},
+    database::{record::Record, restore_policy::RestorePolicy, schema::TableSchema},
     transaction::{isolation_level::IsolationLevel, transaction::Transaction},
 };
 
@@ -87,10 +87,11 @@ impl WriteAheadLog {
 
                 // Restore table creates
                 if let Some(creates) = entry["table_creates"].as_array() {
-                    tx.pending_table_creates = creates
-                        .iter()
-                        .map(|v| v.as_str().unwrap().to_string())
-                        .collect();
+                    for create in creates {
+                        let table = create[0].as_str().unwrap();
+                        let schema: TableSchema = serde_json::from_value(create[1].clone()).unwrap();
+                        tx.pending_table_creates.push((table.to_string(), schema));
+                    }
                 }
 
                 // Restore deletes

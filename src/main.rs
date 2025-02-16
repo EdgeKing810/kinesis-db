@@ -1,9 +1,11 @@
+use std::collections::HashMap;
 use std::fs::create_dir_all;
 
 use components::database::db_type::DatabaseType;
 use components::database::engine::DBEngine;
 use components::database::record::Record;
 use components::database::restore_policy::RestorePolicy;
+use components::database::schema::{FieldConstraint, FieldType, TableSchema};
 use components::database::value_type::ValueType;
 use components::transaction::config::TransactionConfig;
 use components::transaction::isolation_level::IsolationLevel;
@@ -31,10 +33,42 @@ fn main() {
     println!("\n🚀 Initializing Database...");
     // Create data directory
 
+    // Create table schemas
+    let mut fields = HashMap::new();
+    fields.insert("name".to_string(), FieldConstraint {field_type: FieldType::String, required: true, min: None, max: None, pattern: None});
+    fields.insert("age".to_string(), FieldConstraint {field_type: FieldType::Integer, required: true, min: None, max: None, pattern: None});
+    fields.insert("role".to_string(), FieldConstraint {field_type: FieldType::String, required: true, min: None, max: None, pattern: None});
+    fields.insert("salary".to_string(), FieldConstraint {field_type: FieldType::Float, required: true, min: None, max: None, pattern: None});
+    fields.insert("senior".to_string(), FieldConstraint {field_type: FieldType::Boolean, required: true, min: None, max: None, pattern: None});
+    fields.insert("department".to_string(), FieldConstraint {field_type: FieldType::String, required: true, min: None, max: None, pattern: None});
+    fields.insert("work_mode".to_string(), FieldConstraint {field_type: FieldType::String, required: true, min: None, max: None, pattern: None});
+    
+    let users_schema = TableSchema {
+        name: "users".to_string(),
+        fields,
+    };
+
+    let mut fields = HashMap::new();
+    fields.insert("name".to_string(), FieldConstraint {field_type: FieldType::String, required: true, min: None, max: None, pattern: None});
+    fields.insert("species".to_string(), FieldConstraint {field_type: FieldType::String, required: true, min: None, max: None, pattern: None});
+    fields.insert("age".to_string(), FieldConstraint {field_type: FieldType::Integer, required: true, min: None, max: None, pattern: None});
+    fields.insert("weight".to_string(), FieldConstraint {field_type: FieldType::Float, required: true, min: None, max: None, pattern: None});
+    fields.insert("vaccinated".to_string(), FieldConstraint {field_type: FieldType::Boolean, required: true, min: None, max: None, pattern: None});
+    fields.insert("breed".to_string(), FieldConstraint {field_type: FieldType::String, required: true, min: None, max: None, pattern: None});
+    fields.insert("temperament".to_string(), FieldConstraint {field_type: FieldType::String, required: true, min: None, max: None, pattern: None});
+    fields.insert("size".to_string(), FieldConstraint {field_type: FieldType::String, required: true, min: None, max: None, pattern: None});
+    fields.insert("house_trained".to_string(), FieldConstraint {field_type: FieldType::Boolean, required: true, min: None, max: None, pattern: None});
+    fields.insert("origin".to_string(), FieldConstraint {field_type: FieldType::String, required: true, min: None, max: None, pattern: None});
+
+    let animals_schema = TableSchema {
+        name: "animals".to_string(),
+        fields,
+    };
+    
     // Create tables
     let mut tx = engine.begin_transaction();
-    engine.create_table(&mut tx, "users");
-    engine.create_table(&mut tx, "animals");
+    engine.create_table_with_schema(&mut tx, "users", users_schema);
+    engine.create_table_with_schema(&mut tx, "animals", animals_schema);
     engine.commit(tx).unwrap();
     println!("✅ Tables created successfully");
 
@@ -115,21 +149,16 @@ fn main() {
     ];
 
     for (id, name, age, role, salary, senior, department, work_mode) in users {
-        let record = Record {
-            id,
-            values: vec![
-                ValueType::Str(name.to_string()),
-                ValueType::Int(age),
-                ValueType::Str(role.to_string()),
-                ValueType::Float(salary),
-                ValueType::Bool(senior),
-                ValueType::Str(department.to_string()),
-                ValueType::Str(work_mode.to_string()),
-            ],
-            version: 0,
-            timestamp: 0,
-        };
-        engine.insert_record(&mut tx, "users", record);
+        let mut record = Record::new(id);
+        record.set_field("name", ValueType::Str(name.to_string()));
+        record.set_field("age", ValueType::Int(age));
+        record.set_field("role", ValueType::Str(role.to_string()));
+        record.set_field("salary", ValueType::Float(salary));
+        record.set_field("senior", ValueType::Bool(senior));
+        record.set_field("department", ValueType::Str(department.to_string()));
+        record.set_field("work_mode", ValueType::Str(work_mode.to_string()));
+
+        engine.insert_record(&mut tx, "users", record).unwrap();
     }
     engine.commit(tx).unwrap();
     println!("✅ Users data inserted");
@@ -283,24 +312,19 @@ fn main() {
         origin,
     ) in animals
     {
-        let record = Record {
-            id,
-            values: vec![
-                ValueType::Str(name.to_string()),
-                ValueType::Str(species.to_string()),
-                ValueType::Int(age),
-                ValueType::Float(weight),
-                ValueType::Bool(vaccinated),
-                ValueType::Str(breed.to_string()),
-                ValueType::Str(temperament.to_string()),
-                ValueType::Str(size.to_string()),
-                ValueType::Bool(house_trained),
-                ValueType::Str(origin.to_string()),
-            ],
-            version: 0,
-            timestamp: 0,
-        };
-        engine.insert_record(&mut tx, "animals", record);
+        let mut record = Record::new(id);
+        record.set_field("name", ValueType::Str(name.to_string()));
+        record.set_field("species", ValueType::Str(species.to_string()));
+        record.set_field("age", ValueType::Int(age));
+        record.set_field("weight", ValueType::Float(weight));
+        record.set_field("vaccinated", ValueType::Bool(vaccinated));
+        record.set_field("breed", ValueType::Str(breed.to_string()));
+        record.set_field("temperament", ValueType::Str(temperament.to_string()));
+        record.set_field("size", ValueType::Str(size.to_string()));
+        record.set_field("house_trained", ValueType::Bool(house_trained));
+        record.set_field("origin", ValueType::Str(origin.to_string()));
+
+        engine.insert_record(&mut tx, "animals", record).unwrap();
     }
     engine.commit(tx).unwrap();
     println!("✅ Animals data inserted");
@@ -333,42 +357,33 @@ fn main() {
 
     // Promote an employee
     engine.delete_record(&mut tx, "users", 4);
-    let promoted_user = Record {
-        id: 4,
-        values: vec![
-            ValueType::Str("Diana".to_string()),
-            ValueType::Int(29),
-            ValueType::Str("Lead Data Scientist".to_string()),
-            ValueType::Float(120000.0),
-            ValueType::Bool(true),
-            ValueType::Str("Analytics".to_string()),
-            ValueType::Str("Hybrid".to_string()),
-        ],
-        version: 0,
-        timestamp: 0,
-    };
-    engine.insert_record(&mut tx, "users", promoted_user);
+    let mut promoted_user_record = Record::new(4);
+    promoted_user_record.set_field("name", ValueType::Str("Diana".to_string()));
+    promoted_user_record.set_field("age", ValueType::Int(29));
+    promoted_user_record.set_field("role", ValueType::Str("Lead Data Scientist".to_string()));
+    promoted_user_record.set_field("salary", ValueType::Float(120000.0));
+    promoted_user_record.set_field("senior", ValueType::Bool(true));
+    promoted_user_record.set_field("department", ValueType::Str("Analytics".to_string()));
+    promoted_user_record.set_field("work_mode", ValueType::Str("Hybrid".to_string()));
+
+
+    engine.insert_record(&mut tx, "users", promoted_user_record).unwrap();
 
     // Update animal training status
     engine.delete_record(&mut tx, "animals", 6);
-    let trained_cat = Record {
-        id: 6,
-        values: vec![
-            ValueType::Str("Lucy".to_string()),
-            ValueType::Str("Cat".to_string()),
-            ValueType::Int(2),
-            ValueType::Float(3.5),
-            ValueType::Bool(true),
-            ValueType::Str("Siamese".to_string()),
-            ValueType::Str("Well-behaved".to_string()),
-            ValueType::Str("Small".to_string()),
-            ValueType::Bool(true),
-            ValueType::Str("Thailand".to_string()),
-        ],
-        version: 0,
-        timestamp: 0,
-    };
-    engine.insert_record(&mut tx, "animals", trained_cat);
+    let mut trained_cat_record = Record::new(6);
+    trained_cat_record.set_field("name", ValueType::Str("Lucy".to_string()));
+    trained_cat_record.set_field("species", ValueType::Str("Cat".to_string()));
+    trained_cat_record.set_field("age", ValueType::Int(2));
+    trained_cat_record.set_field("weight", ValueType::Float(3.5));
+    trained_cat_record.set_field("vaccinated", ValueType::Bool(true));
+    trained_cat_record.set_field("breed", ValueType::Str("Siamese".to_string()));
+    trained_cat_record.set_field("temperament", ValueType::Str("Well-behaved".to_string()));
+    trained_cat_record.set_field("size", ValueType::Str("Small".to_string()));
+    trained_cat_record.set_field("house_trained", ValueType::Bool(true));
+    trained_cat_record.set_field("origin", ValueType::Str("Thailand".to_string()));
+
+    engine.insert_record(&mut tx, "animals", trained_cat_record).unwrap();
     engine.commit(tx).unwrap();
     println!("✅ Updates completed successfully");
 
@@ -382,15 +397,15 @@ fn main() {
             println!(
                 "ID {}: {} - {} ({})",
                 id,
-                match &user.values[0] {
+                match &user.get_field("name").unwrap() {
                     ValueType::Str(s) => s,
                     _ => "?",
                 },
-                match &user.values[2] {
+                match &user.get_field("role").unwrap() {
                     ValueType::Str(s) => s,
                     _ => "?",
                 },
-                match &user.values[5] {
+                match &user.get_field("department").unwrap() {
                     ValueType::Str(s) => s,
                     _ => "?",
                 }
@@ -404,23 +419,23 @@ fn main() {
             println!(
                 "ID {}: {} - {} {} ({}, {})",
                 id,
-                match &animal.values[0] {
+                match &animal.get_field("name").unwrap() {
                     ValueType::Str(s) => s,
                     _ => "?",
                 },
-                match &animal.values[5] {
+                match &animal.get_field("breed").unwrap() {
                     ValueType::Str(s) => s,
                     _ => "?",
                 },
-                match &animal.values[1] {
+                match &animal.get_field("species").unwrap() {
                     ValueType::Str(s) => s,
                     _ => "?",
                 },
-                match &animal.values[6] {
+                match &animal.get_field("temperament").unwrap() {
                     ValueType::Str(s) => s,
                     _ => "?",
                 },
-                match &animal.values[9] {
+                match &animal.get_field("origin").unwrap() {
                     ValueType::Str(s) => s,
                     _ => "?",
                 }

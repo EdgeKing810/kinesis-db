@@ -18,8 +18,7 @@ use crate::components::{
 };
 
 use super::{
-    commit_guard::CommitGuard, database::Database, db_type::DatabaseType, record::Record,
-    restore_policy::RestorePolicy, table::Table,
+    commit_guard::CommitGuard, database::Database, db_type::DatabaseType, record::Record, restore_policy::RestorePolicy, schema::TableSchema, table::Table
 };
 
 #[derive(Debug)]
@@ -311,7 +310,9 @@ impl DBEngine {
                     .and_then(|t| t.get_record(id))
                 {
                     if let Some(table) = db_lock.tables.get_mut(table_name) {
-                        table.insert_record(snapshot_record.read().unwrap().clone());
+                        table.insert_record(snapshot_record.read().unwrap().clone()).map_err(|e| {
+                            format!("Failed to restore record: {}", e)
+                        })?;
                     }
                 }
             }
@@ -362,12 +363,12 @@ impl DBEngine {
             }
         }
 
-        // Handle remaining changes
-        for table_name in &tx.pending_table_creates {
+        // Handle table creates
+        for (table_name, schema) in &tx.pending_table_creates {
             db_lock
                 .tables
                 .entry(table_name.clone())
-                .or_insert(Table::new());
+                .or_insert_with(|| Table::new(schema.clone()));
         }
 
         for (table_name, mut record) in tx.pending_inserts.clone() {
@@ -375,7 +376,9 @@ impl DBEngine {
             record.timestamp = timestamp;
 
             if let Some(tbl) = db_lock.tables.get_mut(&table_name) {
-                tbl.insert_record(record.clone());
+                tbl.insert_record(record.clone()).map_err(|e| {
+                    format!("Failed to insert record: {}", e)
+                })?;
             } else {
                 return Err(format!("Table not found: {}", table_name));
             }
@@ -502,8 +505,18 @@ impl DBEngine {
 
     // ========== Database / Table Management ==========
 
+    #[allow(dead_code)]
     pub fn create_table(&self, tx: &mut Transaction, table_name: &str) {
-        tx.pending_table_creates.push(table_name.to_string());
+        // Create a default schema
+        let schema = TableSchema {
+            name: table_name.to_string(),
+            fields: HashMap::new(),
+        };
+        tx.pending_table_creates.push((table_name.to_string(), schema));
+    }
+
+    pub fn create_table_with_schema(&self, tx: &mut Transaction, table_name: &str, schema: TableSchema) {
+        tx.pending_table_creates.push((table_name.to_string(), schema));
     }
 
     #[allow(dead_code)]
@@ -520,20 +533,19 @@ impl DBEngine {
 
     // ========== Record Operations (within a transaction) ==========
 
-    pub fn insert_record(&self, tx: &mut Transaction, table_name: &str, record: Record) {
-        // First check if the table exists
+    pub fn insert_record(&self, tx: &mut Transaction, table_name: &str, record: Record) -> Result<(), String> {
         let db_lock = self.db.read().unwrap();
-        if !db_lock.tables.contains_key(table_name) {
-            // Add the insert to pending_inserts anyway so that commit will fail
+        
+        if let Some(table) = db_lock.tables.get(table_name) {
+            // Validate record against table schema
+            table.schema.validate_record(&record.values)?;
+            
+            tx.write_set.push((table_name.to_string(), record.id));
             tx.pending_inserts.push((table_name.to_string(), record));
-            return;
+            Ok(())
+        } else {
+            Err(format!("Table '{}' not found", table_name))
         }
-        drop(db_lock);
-
-        // Track the write in the transaction's write set
-        tx.write_set.push((table_name.to_string(), record.id));
-        // Store the insert in the transaction
-        tx.pending_inserts.push((table_name.to_string(), record));
     }
 
     pub fn delete_record(&mut self, tx: &mut Transaction, table_name: &str, id: u64) {
@@ -664,7 +676,7 @@ impl DBEngine {
 
         // Read TOC
         let toc_frame = buffer_pool.get_page(0, page_store);
-        let table_locations: HashMap<String, Vec<u64>> = {
+        let (table_locations, table_schemas): (HashMap<String, Vec<u64>>, HashMap<String, TableSchema>) = {
             let toc = toc_frame.get_page().read().unwrap();
             bincode::deserialize(&toc.data).unwrap_or_default()
         };
@@ -672,7 +684,13 @@ impl DBEngine {
 
         // Load each table
         for (table_name, page_ids) in table_locations {
-            let mut table = Table::new();
+            let schema = table_schemas.get(&table_name).cloned()
+                .unwrap_or_else(|| TableSchema {
+                    name: table_name.clone(),
+                    fields: HashMap::new(),
+                });
+            
+            let mut table = Table::new(schema);
             let mut all_records = Vec::new();
 
             // Process pages in order
@@ -701,9 +719,12 @@ impl DBEngine {
                 buffer_pool.unpin_page(*page_id, false);
             }
 
-            // Insert all records into table
+            // Insert all records into table with validation
             for record in all_records {
-                table.insert_record(record);
+                if let Err(e) = table.insert_record(record) {
+                    eprintln!("Warning: Failed to insert record in table {}: {}", table_name, e);
+                    continue;
+                }
             }
 
             if !table.data.is_empty() {
@@ -730,6 +751,7 @@ impl DBEngine {
         buffer_pool.flush_all(page_store); // Flush existing pages first
 
         let mut table_locations = HashMap::new();
+        let mut table_schemas = HashMap::new();
         const MAX_DATA_PER_PAGE: usize = PAGE_SIZE - 64; // Increased usable space
 
         for (table_name, table) in &db_lock.tables {
@@ -739,6 +761,9 @@ impl DBEngine {
                 .values()
                 .map(|r| r.read().unwrap().clone())
                 .collect();
+
+            // Store schema
+            table_schemas.insert(table_name.clone(), table.schema.clone());
 
             // Serialize records in chunks to avoid large allocations
             const CHUNK_SIZE: usize = 100;
@@ -785,8 +810,8 @@ impl DBEngine {
             }
         }
 
-        // Write table of contents
-        let toc_data = bincode::serialize(&table_locations)
+        // Write table of contents with schemas
+        let toc_data = bincode::serialize(&(table_locations, table_schemas))
             .map_err(|e| format!("Failed to serialize TOC: {}", e))?;
 
         let toc_frame = buffer_pool.get_page(0, page_store);
@@ -867,8 +892,21 @@ impl DBEngine {
     }
 
     fn calculate_checksum(&self, data: &Database) -> Result<u64, String> {
-        let serialized =
-            bincode::serialize(data).map_err(|e| format!("Failed to serialize DB: {}", e))?;
+        // Convert to a serializable format
+        let serializable_tables: BTreeMap<String, (TableSchema, Vec<Record>)> = data.tables
+            .iter()
+            .map(|(name, table)| {
+                let records: Vec<Record> = table.data
+                    .values()
+                    .map(|r| r.read().unwrap().clone())
+                    .collect();
+                (name.clone(), (table.schema.clone(), records))
+            })
+            .collect();
+
+        let serialized = bincode::serialize(&serializable_tables)
+            .map_err(|e| format!("Failed to serialize DB: {}", e))?;
+        
         let mut hasher = Sha256::new();
         hasher.update(&serialized);
         Ok(u64::from_be_bytes(

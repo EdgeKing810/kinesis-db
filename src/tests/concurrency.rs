@@ -40,16 +40,12 @@ fn test_concurrent_operations() {
                     let mut tx = engine_guard.begin_transaction();
 
                     for i in 0..records_per_thread {
-                        let record = Record {
-                            id: (start_id + i) as u64,
-                            values: vec![ValueType::Str(format!(
-                                "Thread {} Record {}",
-                                thread_id, i
-                            ))],
-                            version: 1,
-                            timestamp: 0,
-                        };
-                        engine_guard.insert_record(&mut tx, "test_table", record);
+                        let mut record = Record::new((start_id + i) as u64);
+                        record.set_field("data", ValueType::Str(format!(
+                            "Thread {} Record {}",
+                            thread_id, i
+                        )));
+                        engine_guard.insert_record(&mut tx, "test_table", record).unwrap();
                     }
 
                     engine_guard.commit(tx).unwrap();
@@ -66,7 +62,7 @@ fn test_concurrent_operations() {
                             .expect("Record should exist");
 
                         assert_eq!(
-                            record.values[0],
+                            *record.get_field("data").unwrap(),
                             ValueType::Str(format!("Thread {} Record {}", thread_id, i))
                         );
                     }
@@ -134,14 +130,10 @@ fn test_concurrent_large_data() {
                     let mut engine_guard = engine.lock().unwrap();
                     let mut tx = engine_guard.begin_transaction();
 
-                    let record = Record {
-                        id: thread_id as u64,
-                        values: vec![ValueType::Str(large_data.clone())],
-                        version: 1,
-                        timestamp: 0,
-                    };
+                    let mut record = Record::new(thread_id as u64);
+                    record.set_field("data", ValueType::Str(large_data.clone()));
 
-                    engine_guard.insert_record(&mut tx, "large_data", record);
+                    engine_guard.insert_record(&mut tx, "large_data", record).unwrap();
                     engine_guard.commit(tx).unwrap();
                 }
 
@@ -154,7 +146,7 @@ fn test_concurrent_large_data() {
                         .get_record(&mut tx, "large_data", thread_id as u64)
                         .expect("Large record should exist");
 
-                    match &record.values[0] {
+                    match &record.get_field("data").unwrap() {
                         ValueType::Str(s) => assert_eq!(s.len(), 20000),
                         _ => panic!("Unexpected value type"),
                     }

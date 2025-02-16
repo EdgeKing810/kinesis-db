@@ -24,7 +24,7 @@ fn create_test_db(name: &str, db_type: DatabaseType) -> DBEngine {
         db_path.to_str().unwrap(),
         wal_path.to_str().unwrap(),
         None,
-        IsolationLevel::ReadCommitted,
+        IsolationLevel::Serializable,
     )
 }
 
@@ -36,14 +36,12 @@ fn test_inmemory_database() {
     let mut tx = engine.begin_transaction();
     engine.create_table(&mut tx, "test_table");
 
-    let record = Record {
-        id: 1,
-        values: vec![ValueType::Str("test data".to_string())],
-        version: 1,
-        timestamp: 0,
-    };
+    let mut record = Record::new(1);
+    record.set_field("data", ValueType::Str("test data".to_string()));
+    engine.commit(tx).unwrap();
 
-    engine.insert_record(&mut tx, "test_table", record);
+    let mut tx = engine.begin_transaction();
+    engine.insert_record(&mut tx, "test_table", record).unwrap();
     engine.commit(tx).unwrap();
 
     // Drop engine and create new one - data should be gone
@@ -64,15 +62,13 @@ fn test_ondisk_database() {
     // Create and insert data
     let mut tx = engine.begin_transaction();
     engine.create_table(&mut tx, "test_table");
+    engine.commit(tx).unwrap();
 
-    let record = Record {
-        id: 1,
-        values: vec![ValueType::Str("test data".to_string())],
-        version: 1,
-        timestamp: 0,
-    };
+    let mut tx = engine.begin_transaction();
+    let mut record = Record::new(1);
+    record.set_field("data", ValueType::Str("test data".to_string()));
 
-    engine.insert_record(&mut tx, "test_table", record.clone());
+    engine.insert_record(&mut tx, "test_table", record.clone()).unwrap();
     engine.commit(tx).unwrap();
 
     // Drop engine and create new one - data should persist
@@ -85,7 +81,7 @@ fn test_ondisk_database() {
         .expect("OnDisk database should persist data");
 
     assert_eq!(
-        loaded_record.values[0], record.values[0],
+        loaded_record.get_field("data"), record.get_field("data"),
         "Loaded record should match original"
     );
 }
@@ -108,13 +104,9 @@ fn test_hybrid_database() {
         let batch_end = (batch_start + BATCH_SIZE).min(num_records);
 
         for i in batch_start..batch_end {
-            let record = Record {
-                id: i as u64,
-                values: vec![ValueType::Str(format!("test data {}", i))],
-                version: 1,
-                timestamp: 0,
-            };
-            engine.insert_record(&mut tx, "test_table", record);
+            let mut record = Record::new(i as u64);
+            record.set_field("data", ValueType::Str(format!("test data {}", i)));
+            engine.insert_record(&mut tx, "test_table", record).unwrap();
         }
         engine.commit(tx).unwrap();
     }
@@ -203,15 +195,13 @@ fn test_database_type_persistence() {
         // Write data
         let mut tx = engine.begin_transaction();
         engine.create_table(&mut tx, "test_table");
+        engine.commit(tx).unwrap();
 
-        let record = Record {
-            id: 1,
-            values: vec![ValueType::Str("test data".to_string())],
-            version: 1,
-            timestamp: 0,
-        };
+        let mut tx = engine.begin_transaction();
+        let mut record = Record::new(1);
+        record.set_field("data", ValueType::Str("test data".to_string()));
 
-        engine.insert_record(&mut tx, "test_table", record);
+        engine.insert_record(&mut tx, "test_table", record).unwrap();
         engine.commit(tx).unwrap();
 
         // Restart engine
@@ -233,30 +223,19 @@ fn test_hybrid_mode_behavior() {
 
     // Memory operation
     engine.create_table(&mut tx, "memory_table");
-    engine.insert_record(
-        &mut tx,
-        "memory_table",
-        Record {
-            id: 1,
-            values: vec![ValueType::Int(1)],
-            version: 1,
-            timestamp: 0,
-        },
-    );
+    engine.commit(tx).unwrap();
 
+    let mut tx = engine.begin_transaction();
     // Force disk operation
     for i in 0..10000 {
         // Exceed buffer pool size
+        let mut record = Record::new(i);
+        record.set_field("integer", ValueType::Int(i as i64));
         engine.insert_record(
             &mut tx,
             "memory_table",
-            Record {
-                id: i,
-                values: vec![ValueType::Int(i as i64)],
-                version: 1,
-                timestamp: 0,
-            },
-        );
+            record
+        ).unwrap();
     }
 
     engine.commit(tx).unwrap();
@@ -274,16 +253,16 @@ fn test_inmemory_no_persistence() {
     // Create and populate table
     let mut tx = engine.begin_transaction();
     engine.create_table(&mut tx, "test_table");
+    engine.commit(tx).unwrap();
+
+    let mut tx = engine.begin_transaction();
+    let mut record = Record::new(1);
+    record.set_field("data", ValueType::Str("test data".to_string()));
     engine.insert_record(
         &mut tx,
         "test_table",
-        Record {
-            id: 1,
-            values: vec![ValueType::Str("test data".to_string())],
-            version: 1,
-            timestamp: 0,
-        },
-    );
+        record
+    ).unwrap();
     engine.commit(tx).unwrap();
     drop(engine);
 
@@ -303,20 +282,20 @@ fn test_ondisk_buffer_eviction() {
 
     let mut tx = engine.begin_transaction();
     engine.create_table(&mut tx, "test_table");
+    engine.commit(tx).unwrap();
+
+    let mut tx = engine.begin_transaction();
 
     // Fill buffer pool and force evictions
     for i in 0..1000 {
         // Exceed buffer pool size
+        let mut record = Record::new(i);
+        record.set_field("data", ValueType::Int(i as i64));
         engine.insert_record(
             &mut tx,
             "test_table",
-            Record {
-                id: i,
-                values: vec![ValueType::Int(i as i64)],
-                version: 1,
-                timestamp: 0,
-            },
-        );
+            record
+        ).unwrap();
     }
 
     engine.commit(tx).unwrap();
@@ -363,16 +342,16 @@ fn test_recovery_by_database_type() {
         // Setup data
         let mut tx = engine.begin_transaction();
         engine.create_table(&mut tx, "test_table");
+        engine.commit(tx).unwrap();
+
+        let mut tx = engine.begin_transaction();
+        let mut record = Record::new(1);
+        record.set_field("data", ValueType::Str("test data".to_string()));
         engine.insert_record(
             &mut tx,
             "test_table",
-            Record {
-                id: 1,
-                values: vec![ValueType::Str("test data".to_string())],
-                version: 1,
-                timestamp: 0,
-            },
-        );
+            record
+        ).unwrap();
         engine.commit(tx).unwrap();
 
         // Simulate crash
@@ -419,13 +398,9 @@ fn test_concurrent_bulk_operations() {
                     let mut tx = engine.begin_transaction();
 
                     for i in 0..RECORDS_PER_THREAD {
-                        let record = Record {
-                            id: (start_id + i) as u64,
-                            values: vec![ValueType::Str(format!("Data from thread {}", thread_id))],
-                            version: 1,
-                            timestamp: 0,
-                        };
-                        engine.insert_record(&mut tx, "test_table", record);
+                        let mut record = Record::new((start_id + i) as u64);
+                        record.set_field("data", ValueType::Str(format!("Data from thread {}", thread_id)));
+                        engine.insert_record(&mut tx, "test_table", record).unwrap();
                     }
                     engine.commit(tx).unwrap();
                 }

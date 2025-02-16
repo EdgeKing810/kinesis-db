@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::components::database::{database::Database, record::Record};
+use crate::components::database::{database::Database, record::Record, schema::TableSchema};
 
 use super::isolation_level::IsolationLevel;
 
@@ -14,7 +14,7 @@ pub struct Transaction {
     pub write_set: Vec<(String, u64)>,               // (table, record_id)
     pub snapshot: Option<Database>, // Snapshot of the database at the start of the transaction
     pub start_timestamp: u64,       // Start time of the transaction
-    pub pending_table_creates: Vec<String>, // List of tables to create
+    pub pending_table_creates: Vec<(String, TableSchema)>, // List of tables to create (table_name, schema)
     pub pending_table_drops: Vec<String>, // List of tables to drop
 }
 

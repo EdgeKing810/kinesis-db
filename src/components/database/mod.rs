@@ -21,3 +21,6 @@ pub mod restore_policy;
 
 #[path = "commit_guard.rs"]
 pub mod commit_guard;
+
+#[path = "schema.rs"]
+pub mod schema;

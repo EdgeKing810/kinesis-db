@@ -22,7 +22,7 @@ fn test_bulk_operations() {
             &mut tx,
             "test_table",
             create_test_record(i, &format!("Test{}", i)),
-        );
+        ).unwrap();
     }
     engine.commit(tx).unwrap();
 

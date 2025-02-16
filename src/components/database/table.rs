@@ -1,20 +1,20 @@
 use std::{
     collections::BTreeMap,
-    fmt::{self, Formatter},
     sync::{Arc, RwLock},
 };
 
 use serde::{
-    de::{MapAccess, Visitor},
     ser::SerializeMap,
     Deserialize, Deserializer, Serialize, Serializer,
 };
 
 use super::{record::Record, value_type::ValueType};
+use super::schema::TableSchema;
 
 #[derive(Debug, Clone)]
 pub struct Table {
     pub data: BTreeMap<u64, Arc<RwLock<Record>>>, // A map of record IDs to records
+    pub schema: TableSchema,
 }
 
 // Custom serialization for Table
@@ -23,11 +23,14 @@ impl Serialize for Table {
     where
         S: Serializer,
     {
-        let mut map = serializer.serialize_map(Some(self.data.len()))?;
-        for (key, value) in &self.data {
-            let record = value.read().unwrap();
-            map.serialize_entry(key, &*record)?;
-        }
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("schema", &self.schema)?;
+        // Convert to regular records for serialization
+        let records: BTreeMap<u64, Record> = self.data
+            .iter()
+            .map(|(k, v)| (*k, v.read().unwrap().clone()))
+            .collect();
+        map.serialize_entry("data", &records)?;
         map.end()
     }
 }
@@ -38,41 +41,36 @@ impl<'de> Deserialize<'de> for Table {
     where
         D: Deserializer<'de>,
     {
-        struct TableVisitor;
-
-        impl<'de> Visitor<'de> for TableVisitor {
-            type Value = Table;
-
-            fn expecting(&self, formatter: &mut Formatter) -> fmt::Result {
-                formatter.write_str("A map of record IDs to records")
-            }
-
-            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-            where
-                A: MapAccess<'de>,
-            {
-                let mut data = BTreeMap::new();
-                while let Some((key, value)) = map.next_entry()? {
-                    data.insert(key, Arc::new(RwLock::new(value)));
-                }
-                Ok(Table { data })
-            }
+        #[derive(Deserialize)]
+        struct TableData {
+            schema: TableSchema,
+            data: BTreeMap<u64, Record>,
         }
 
-        deserializer.deserialize_map(TableVisitor)
+        let TableData { schema, data } = TableData::deserialize(deserializer)?;
+        
+        Ok(Table {
+            data: data.into_iter()
+                .map(|(k, v)| (k, Arc::new(RwLock::new(v))))
+                .collect(),
+            schema,
+        })
     }
 }
 
 impl Table {
-    pub fn new() -> Self {
+    pub fn new(schema: TableSchema) -> Self {
         Table {
             data: BTreeMap::new(),
+            schema,
         }
     }
 
-    pub fn insert_record(&mut self, record: Record) {
-        // Insert new a record into the table
+    pub fn insert_record(&mut self, record: Record) -> Result<(), String> {
+        // Validate record against schema
+        self.schema.validate_record(&record.values)?;
         self.data.insert(record.id, Arc::new(RwLock::new(record)));
+        Ok(())
     }
 
     pub fn get_record(&self, id: &u64) -> Option<Arc<RwLock<Record>>> {
@@ -95,7 +93,7 @@ impl Table {
             .values()
             .filter(|rec| {
                 let record = rec.read().unwrap();
-                record.values.iter().any(|value| match value {
+                record.values.values().any(|value| match value {
                     ValueType::Str(s) => {
                         s.contains(query)
                             || (case_insensitive
