@@ -39,6 +39,28 @@ pub struct TableSchema {
 }
 
 impl FieldConstraint {
+    #[allow(dead_code)]
+    pub fn create_required(field_type: FieldType) -> Self {
+        FieldConstraint {
+            field_type,
+            required: true,
+            min: None,
+            max: None,
+            pattern: None,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn create_optional(field_type: FieldType) -> Self {
+        FieldConstraint {
+            field_type,
+            required: false,
+            min: None,
+            max: None,
+            pattern: None,
+        }
+    }
+
     pub fn validate(&self, value: &ValueType) -> Result<(), String> {
         // First check type matching
         if !self.field_type.matches_value_type(value) {

@@ -37,73 +37,31 @@ fn main() {
     let mut fields = HashMap::new();
     fields.insert(
         "name".to_string(),
-        FieldConstraint {
-            field_type: FieldType::String,
-            required: true,
-            min: None,
-            max: None,
-            pattern: None,
-        },
+        FieldConstraint::create_required(FieldType::String),
     );
     fields.insert(
         "age".to_string(),
-        FieldConstraint {
-            field_type: FieldType::Integer,
-            required: true,
-            min: None,
-            max: None,
-            pattern: None,
-        },
+        FieldConstraint::create_required(FieldType::Integer),
     );
     fields.insert(
         "role".to_string(),
-        FieldConstraint {
-            field_type: FieldType::String,
-            required: true,
-            min: None,
-            max: None,
-            pattern: None,
-        },
+        FieldConstraint::create_required(FieldType::String),
     );
     fields.insert(
         "salary".to_string(),
-        FieldConstraint {
-            field_type: FieldType::Float,
-            required: true,
-            min: None,
-            max: None,
-            pattern: None,
-        },
+        FieldConstraint::create_required(FieldType::Float),
     );
     fields.insert(
         "senior".to_string(),
-        FieldConstraint {
-            field_type: FieldType::Boolean,
-            required: true,
-            min: None,
-            max: None,
-            pattern: None,
-        },
+        FieldConstraint::create_required(FieldType::Boolean),
     );
     fields.insert(
         "department".to_string(),
-        FieldConstraint {
-            field_type: FieldType::String,
-            required: true,
-            min: None,
-            max: None,
-            pattern: None,
-        },
+        FieldConstraint::create_required(FieldType::String),
     );
     fields.insert(
         "work_mode".to_string(),
-        FieldConstraint {
-            field_type: FieldType::String,
-            required: true,
-            min: None,
-            max: None,
-            pattern: None,
-        },
+        FieldConstraint::create_required(FieldType::String),
     );
 
     let users_schema = TableSchema {
@@ -114,103 +72,43 @@ fn main() {
     let mut fields = HashMap::new();
     fields.insert(
         "name".to_string(),
-        FieldConstraint {
-            field_type: FieldType::String,
-            required: true,
-            min: None,
-            max: None,
-            pattern: None,
-        },
+        FieldConstraint::create_required(FieldType::String),
     );
     fields.insert(
         "species".to_string(),
-        FieldConstraint {
-            field_type: FieldType::String,
-            required: true,
-            min: None,
-            max: None,
-            pattern: None,
-        },
+        FieldConstraint::create_required(FieldType::String),
     );
     fields.insert(
         "age".to_string(),
-        FieldConstraint {
-            field_type: FieldType::Integer,
-            required: true,
-            min: None,
-            max: None,
-            pattern: None,
-        },
+        FieldConstraint::create_required(FieldType::Integer),
     );
     fields.insert(
         "weight".to_string(),
-        FieldConstraint {
-            field_type: FieldType::Float,
-            required: true,
-            min: None,
-            max: None,
-            pattern: None,
-        },
+        FieldConstraint::create_required(FieldType::Float),
     );
     fields.insert(
         "vaccinated".to_string(),
-        FieldConstraint {
-            field_type: FieldType::Boolean,
-            required: true,
-            min: None,
-            max: None,
-            pattern: None,
-        },
+        FieldConstraint::create_required(FieldType::Boolean),
     );
     fields.insert(
         "breed".to_string(),
-        FieldConstraint {
-            field_type: FieldType::String,
-            required: true,
-            min: None,
-            max: None,
-            pattern: None,
-        },
+        FieldConstraint::create_required(FieldType::String),
     );
     fields.insert(
         "temperament".to_string(),
-        FieldConstraint {
-            field_type: FieldType::String,
-            required: true,
-            min: None,
-            max: None,
-            pattern: None,
-        },
+        FieldConstraint::create_required(FieldType::String),
     );
     fields.insert(
         "size".to_string(),
-        FieldConstraint {
-            field_type: FieldType::String,
-            required: true,
-            min: None,
-            max: None,
-            pattern: None,
-        },
+        FieldConstraint::create_required(FieldType::String),
     );
     fields.insert(
         "house_trained".to_string(),
-        FieldConstraint {
-            field_type: FieldType::Boolean,
-            required: true,
-            min: None,
-            max: None,
-            pattern: None,
-        },
+        FieldConstraint::create_required(FieldType::Boolean),
     );
     fields.insert(
         "origin".to_string(),
-        FieldConstraint {
-            field_type: FieldType::String,
-            required: true,
-            min: None,
-            max: None,
-            pattern: None,
-        },
+        FieldConstraint::create_required(FieldType::String),
     );
 
     let animals_schema = TableSchema {

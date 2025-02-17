@@ -13,6 +13,7 @@ mod isolation_levels;
 mod large_data_persistence;
 mod performance;
 mod rollback;
+mod schema;
 mod wal_operations;
 
 // Helper to create a unique test directory
