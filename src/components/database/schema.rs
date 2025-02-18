@@ -30,6 +30,8 @@ pub struct FieldConstraint {
     pub min: Option<f64>,
     pub max: Option<f64>,
     pub pattern: Option<String>,
+    pub unique: bool,
+    pub default: Option<ValueType>, // New field
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,6 +49,8 @@ impl FieldConstraint {
             min: None,
             max: None,
             pattern: None,
+            unique: false,
+            default: None, // No default value
         }
     }
 
@@ -58,6 +62,8 @@ impl FieldConstraint {
             min: None,
             max: None,
             pattern: None,
+            unique: false,
+            default: None, // No default value
         }
     }
 
@@ -140,14 +146,13 @@ impl TableSchema {
 
         // Then check for required fields and validate values
         for (field_name, constraint) in &self.fields {
-            if constraint.required {
-                if !values.contains_key(field_name) {
-                    return Err(format!("Required field '{}' is missing", field_name));
+            match values.get(field_name) {
+                Some(value) => constraint.validate(value)?,
+                None => {
+                    if constraint.required && constraint.default.is_none() {
+                        return Err(format!("Required field '{}' is missing", field_name));
+                    }
                 }
-            }
-
-            if let Some(value) = values.get(field_name) {
-                constraint.validate(value)?;
             }
         }
 

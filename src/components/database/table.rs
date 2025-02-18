@@ -65,9 +65,46 @@ impl Table {
         }
     }
 
-    pub fn insert_record(&mut self, record: Record) -> Result<(), String> {
-        // Validate record against schema
+    pub fn insert_record(&mut self, mut record: Record) -> Result<(), String> {
+        // Add default values for missing fields
+        for (field_name, constraint) in &self.schema.fields {
+            if !record.values.contains_key(field_name) {
+                if let Some(default_value) = &constraint.default {
+                    record.set_field(field_name, default_value.clone());
+                }
+            }
+        }
+
+        // Validate the record (including fields with default values)
         self.schema.validate_record(&record.values)?;
+
+        // Check unique constraints
+        for (field_name, value) in &record.values {
+            if let Some(constraint) = self.schema.fields.get(field_name) {
+                if constraint.unique {
+                    // Check if any existing record has the same value for this field
+                    for existing_record in self.data.values() {
+                        let existing = existing_record.read().unwrap();
+                        if existing.id != record.id {
+                            // Don't compare with self on updates
+                            if let Some(existing_value) = existing.values.get(field_name) {
+                                if existing_value == value
+                                    && (constraint.default.is_none()
+                                        || existing_value != constraint.default.as_ref().unwrap())
+                                {
+                                    return Err(format!(
+                                        "Unique constraint violation: value already exists for field '{}'",
+                                        field_name
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // If all validations pass, insert the record
         self.data.insert(record.id, Arc::new(RwLock::new(record)));
         Ok(())
     }
