@@ -5,6 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 
 mod basic_operations;
+mod benchmark;
 mod buffer_pool;
 pub mod concurrency;
 mod database_types;

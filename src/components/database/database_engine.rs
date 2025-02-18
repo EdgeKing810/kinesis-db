@@ -19,7 +19,7 @@ use crate::components::{
 
 use super::{
     commit_guard::CommitGuard, database::Database, db_type::DatabaseType, record::Record,
-    restore_policy::RestorePolicy, schema::TableSchema, table::Table,
+    restore_policy::RestorePolicy, schema::TableSchema, table::Table, value_type::ValueType,
 };
 
 #[derive(Debug)]
@@ -393,6 +393,12 @@ impl DBEngine {
             }
         }
 
+        for (table_name, id, updates) in &tx.pending_updates {
+            if let Some(table) = db_lock.tables.get_mut(table_name) {
+                table.update_record(*id, timestamp, updates)?;
+            }
+        }
+
         Ok(())
     }
 
@@ -438,7 +444,22 @@ impl DBEngine {
 
         // First check if this record is in our write set
         if tx.write_set.contains(&(table_name.to_string(), id)) {
-            // Check pending inserts first
+            // Check pending updates first
+            if let Some((_, _, updates)) = tx
+                .pending_updates
+                .iter()
+                .find(|(t, rid, _)| t == table_name && *rid == id)
+            {
+                // Get the base record and apply updates
+                let mut record =
+                    self.get_latest_record(&self.db.read().unwrap(), table_name, id)?;
+                record
+                    .values
+                    .extend(updates.iter().map(|(k, v)| (k.clone(), v.clone())));
+                return Some(record);
+            }
+
+            // Then check pending inserts
             if let Some((_, record)) = tx
                 .pending_inserts
                 .iter()
@@ -447,7 +468,7 @@ impl DBEngine {
                 return Some(record.clone());
             }
 
-            // If not in pending inserts, it might be deleted
+            // Finally check if it's deleted
             if tx
                 .pending_deletes
                 .iter()
@@ -570,40 +591,58 @@ impl DBEngine {
         }
     }
 
-    pub fn delete_record(&mut self, tx: &mut Transaction, table_name: &str, id: u64) {
-        // First try to acquire the lock
-        if !self
-            .tx_manager
-            .acquire_lock_with_retry(tx.id, table_name, id)
-        {
-            // If we can't acquire the lock, check for deadlock
-            if self.tx_manager.has_deadlock(tx.id) {
-                // If there's a deadlock, mark the transaction as failed
-                tx.write_set.push((table_name.to_string(), id)); // Add to write set so commit will fail
-                return;
-            }
-
-            // Wait for lock (in real system this would be async)
-            std::thread::sleep(std::time::Duration::from_millis(10));
-            if !self
-                .tx_manager
-                .acquire_lock_with_retry(tx.id, table_name, id)
-            {
-                return; // Give up if still can't acquire lock
-            }
-        }
-
+    pub fn update_record(
+        &self,
+        tx: &mut Transaction,
+        table_name: &str,
+        id: u64,
+        updates: HashMap<String, ValueType>,
+    ) -> Result<(), String> {
         let db_lock = self.db.read().unwrap();
+
+        let table = db_lock
+            .tables
+            .get(table_name)
+            .ok_or_else(|| format!("Table '{}' not found", table_name))?;
+
+        // First get the record and validate it exists
+        match table.get_record(&id) {
+            Some(record_arc) => {
+                let original = record_arc.read().unwrap().clone();
+                let mut updated_values = original.values.clone();
+                updated_values.extend(updates.clone());
+
+                // Validate updated record against schema
+                table.schema.validate_record(&updated_values)?;
+
+                // Only after validation succeeds, track changes
+                tx.write_set.push((table_name.to_string(), id));
+                tx.pending_updates
+                    .push((table_name.to_string(), id, updates));
+
+                Ok(())
+            }
+            None => Err(format!("Record {} not found", id)),
+        }
+    }
+
+    pub fn delete_record(&mut self, tx: &mut Transaction, table_name: &str, id: u64) -> bool {
+        let db_lock = self.db.read().unwrap();
+
         if let Some(tbl) = db_lock.tables.get(table_name) {
             if let Some(old_rec_arc) = tbl.get_record(&id) {
-                let old_rec = old_rec_arc.read().unwrap();
-                // Track the write in the transaction's write set
+                let old_rec = old_rec_arc.read().unwrap().clone();
                 tx.write_set.push((table_name.to_string(), id));
-                // Store the delete in the transaction
                 tx.pending_deletes
-                    .push((table_name.to_string(), id, old_rec.clone()));
+                    .push((table_name.to_string(), id, old_rec));
+            } else {
+                return false;
             }
+        } else {
+            return false;
         }
+
+        true
     }
 
     pub fn search_records(

@@ -21,8 +21,20 @@ Horse count: 1
 Sheep count: 1
 Pig count: 1
 
-✏️ Testing Updates...
-✅ Updates completed successfully
+✏️ Testing Fake Updates...
+✅ Fake Updates completed successfully
+
+✏️ Testing Real Updates...
+
+Diana's updated record:
+  Salary: 120000
+  Work Mode: Hybrid
+
+Max's updated record:
+  Temperament: Very Friendly
+  House Trained: true
+
+✅ Real Updates completed successfully
 
 📊 Final Database State:
 
@@ -37,7 +49,7 @@ ID 7: Grace - QA Engineer (Quality)
 ID 8: Henry - Solutions Architect (Engineering)
 
 🐾 Animals:
-ID 1: Max - Golden Retriever Dog (Friendly, USA)
+ID 1: Max - Golden Retriever Dog (Very Friendly, USA)
 ID 2: Luna - German Shepherd Dog (Protective, Germany)
 ID 3: Rocky - French Bulldog Dog (Playful, France)
 ID 4: Bella - Persian Cat (Lazy, Iran)

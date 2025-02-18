@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fs::{File, OpenOptions},
     io::{BufRead, BufReader, BufWriter, Read, Write},
 };
@@ -8,7 +9,9 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::components::{
-    database::{record::Record, restore_policy::RestorePolicy, schema::TableSchema},
+    database::{
+        record::Record, restore_policy::RestorePolicy, schema::TableSchema, value_type::ValueType,
+    },
     transaction::{isolation_level::IsolationLevel, transaction::Transaction},
 };
 
@@ -124,9 +127,24 @@ impl WriteAheadLog {
                     }
                 }
 
+                // Restore updates
+                if let Some(updates) = entry["updates"].as_array() {
+                    for update in updates {
+                        let table = update[0].as_str().unwrap();
+                        let record_id = update[1].as_u64().unwrap();
+                        let updated_data: HashMap<String, ValueType> =
+                            serde_json::from_value(update[2].clone()).unwrap();
+                        tx.pending_updates
+                            .push((table.to_string(), record_id, updated_data));
+                    }
+                }
+
                 // Add to write set
                 for (table_name, record) in &tx.pending_inserts {
                     tx.write_set.push((table_name.clone(), record.id));
+                }
+                for (table_name, id, _) in &tx.pending_updates {
+                    tx.write_set.push((table_name.clone(), *id));
                 }
                 for (table_name, id, _) in &tx.pending_deletes {
                     tx.write_set.push((table_name.clone(), *id));
@@ -143,11 +161,13 @@ impl WriteAheadLog {
         );
         for tx in &transactions {
             println!(
-                "  TX {}: {} creates, {} drops, {} inserts, {} deletes",
+                "  TX {}: {} creates, {} schema updates, {} drops, {} inserts, {} updates, {} deletes",
                 tx.id,
                 tx.pending_table_creates.len(),
+                tx.pending_schema_updates.len(),
                 tx.pending_table_drops.len(),
                 tx.pending_inserts.len(),
+                tx.pending_updates.len(),
                 tx.pending_deletes.len()
             );
         }
@@ -191,6 +211,7 @@ impl WriteAheadLog {
             "table_drops": &tx.pending_table_drops,
             "schema_updates": &tx.pending_schema_updates,
             "inserts": &tx.pending_inserts,
+            "updates": &tx.pending_updates,
             "deletes": &tx.pending_deletes,
             "status": "pending"
         });

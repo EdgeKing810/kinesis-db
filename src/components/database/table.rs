@@ -109,6 +109,70 @@ impl Table {
         Ok(())
     }
 
+    pub fn update_record(
+        &mut self,
+        id: u64,
+        timestamp: u64,
+        updates: &HashMap<String, ValueType>,
+    ) -> Result<(), String> {
+        // First validate without holding any locks
+        let record_arc = self
+            .data
+            .get(&id)
+            .ok_or_else(|| format!("Record {} not found", id))?;
+
+        let current_values = {
+            let record = record_arc
+                .read()
+                .map_err(|_| "Failed to read record".to_string())?;
+            record.values.clone()
+        };
+
+        // Create temporary copy with updates for validation
+        let mut updated_values = current_values.clone();
+        updated_values.extend(updates.iter().map(|(k, v)| (k.clone(), v.clone())));
+
+        // Validate against schema
+        self.schema.validate_record(&updated_values)?;
+
+        // Check unique constraints without holding the write lock
+        for (field_name, new_value) in updates {
+            if let Some(constraint) = self.schema.fields.get(field_name) {
+                if constraint.unique {
+                    for other_record in self.data.values() {
+                        let other = other_record.read().map_err(|_| {
+                            "Failed to read record for uniqueness check".to_string()
+                        })?;
+                        if other.id != id
+                            && other
+                                .values
+                                .get(field_name)
+                                .map_or(false, |v| v == new_value)
+                        {
+                            return Err(format!(
+                                "Unique constraint violation: value already exists for field '{}'",
+                                field_name
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Only now acquire the write lock and update
+        let mut record = record_arc
+            .write()
+            .map_err(|_| "Failed to acquire write lock".to_string())?;
+
+        record
+            .values
+            .extend(updates.iter().map(|(k, v)| (k.clone(), v.clone())));
+        record.version += 1;
+        record.timestamp = timestamp;
+
+        Ok(())
+    }
+
     pub fn get_record(&self, id: &u64) -> Option<Arc<RwLock<Record>>> {
         // Get a record from the table
         self.data.get(id).cloned()

@@ -495,3 +495,88 @@ fn test_schema_updates() {
         .update_table_schema(&mut tx, "users", unique_schema)
         .is_err());
 }
+
+#[test]
+fn test_record_updates() {
+    let mut engine = setup_test_db("record_updates", IsolationLevel::Serializable);
+
+    // Create initial schema
+    let mut tx = engine.begin_transaction();
+    let mut fields = HashMap::new();
+    fields.insert(
+        "username".to_string(),
+        FieldConstraint {
+            field_type: FieldType::String,
+            required: true,
+            min: None,
+            max: None,
+            pattern: None,
+            unique: true,
+            default: None,
+        },
+    );
+    fields.insert(
+        "age".to_string(),
+        FieldConstraint {
+            field_type: FieldType::Integer,
+            required: true,
+            min: Some(0.0),
+            max: Some(150.0),
+            pattern: None,
+            unique: false,
+            default: Some(ValueType::Int(18)),
+        },
+    );
+
+    let schema = TableSchema {
+        name: "users".to_string(),
+        fields,
+        version: 1,
+    };
+
+    // Create table and insert initial record
+    engine.create_table_with_schema(&mut tx, "users", schema);
+    engine.commit(tx).unwrap();
+
+    let mut tx = engine.begin_transaction();
+    let mut record = Record::new(1);
+    record.set_field("username", ValueType::Str("john_doe".to_string()));
+    record.set_field("age", ValueType::Int(25));
+    engine.insert_record(&mut tx, "users", record).unwrap();
+    engine.commit(tx).unwrap();
+
+    // Test 1: Valid update
+    let mut tx = engine.begin_transaction();
+    let mut updates = HashMap::new();
+    updates.insert("age".to_string(), ValueType::Int(26));
+    assert!(engine.update_record(&mut tx, "users", 1, updates).is_ok());
+    engine.commit(tx).unwrap();
+
+    // Verify update
+    let mut tx = engine.begin_transaction();
+    let updated = engine.get_record(&mut tx, "users", 1).unwrap();
+    assert_eq!(updated.get_field("age"), Some(&ValueType::Int(26)));
+
+    // Test 2: Update with invalid value
+    let mut tx = engine.begin_transaction();
+    let mut updates = HashMap::new();
+    updates.insert("age".to_string(), ValueType::Int(-1)); // Below min
+    assert!(engine.update_record(&mut tx, "users", 1, updates).is_err());
+
+    // Test 3: Update violating unique constraint
+    let mut tx = engine.begin_transaction();
+    let mut record2 = Record::new(2);
+    record2.set_field("username", ValueType::Str("jane_doe".to_string()));
+    record2.set_field("age", ValueType::Int(30));
+    engine.insert_record(&mut tx, "users", record2).unwrap();
+    engine.commit(tx).unwrap();
+
+    let mut tx = engine.begin_transaction();
+    let mut updates = HashMap::new();
+    updates.insert(
+        "username".to_string(),
+        ValueType::Str("jane_doe".to_string()),
+    ); // Already exists
+    engine.update_record(&mut tx, "users", 1, updates).unwrap();
+    assert!(engine.commit(tx).is_err());
+}

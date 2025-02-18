@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -56,6 +57,31 @@ impl Hash for ValueType {
                 // Convert float to integer bits for consistent hashing
                 f.to_bits().hash(state);
             }
+        }
+    }
+}
+
+impl fmt::Display for ValueType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ValueType::Str(s) => write!(f, "{}", s),
+            ValueType::Int(i) => write!(f, "{}", i),
+            ValueType::Float(fl) => {
+                // Handle special cases for floats
+                if fl.is_nan() {
+                    write!(f, "NaN")
+                } else if fl.is_infinite() {
+                    write!(f, "{}", if fl.is_sign_positive() { "∞" } else { "-∞" })
+                } else {
+                    // Format with minimal decimal places needed
+                    let s = format!("{:.6}", fl)
+                        .trim_end_matches('0')
+                        .trim_end_matches('.')
+                        .to_string();
+                    write!(f, "{}", s)
+                }
+            }
+            ValueType::Bool(b) => write!(f, "{}", b),
         }
     }
 }

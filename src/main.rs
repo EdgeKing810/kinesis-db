@@ -405,7 +405,7 @@ fn main() {
     }
 
     // Test complex updates
-    println!("\n✏️ Testing Updates...");
+    println!("\n✏️ Testing Fake Updates...");
     let mut tx = engine.begin_transaction();
 
     // Promote an employee
@@ -440,8 +440,58 @@ fn main() {
     engine
         .insert_record(&mut tx, "animals", trained_cat_record)
         .unwrap();
+
     engine.commit(tx).unwrap();
-    println!("✅ Updates completed successfully");
+    println!("✅ Fake Updates completed successfully");
+
+    println!("\n✏️ Testing Real Updates...");
+    let mut tx = engine.begin_transaction();
+
+    // Update Diana's salary and work mode
+    let mut salary_update = HashMap::new();
+    salary_update.insert("salary".to_string(), ValueType::Float(120000.0));
+    salary_update.insert(
+        "work_mode".to_string(),
+        ValueType::Str("Hybrid".to_string()),
+    );
+
+    if let Err(e) = engine.update_record(&mut tx, "users", 4, salary_update) {
+        println!("Failed to update Diana's record: {}", e);
+    }
+
+    // Update Max's training status and temperament
+    let mut pet_update = HashMap::new();
+    pet_update.insert(
+        "temperament".to_string(),
+        ValueType::Str("Very Friendly".to_string()),
+    );
+    pet_update.insert("house_trained".to_string(), ValueType::Bool(true));
+
+    if let Err(e) = engine.update_record(&mut tx, "animals", 1, pet_update) {
+        println!("Failed to update Max's record: {}", e);
+    }
+
+    engine.commit(tx).unwrap();
+
+    // Verify updates
+    let mut tx = engine.begin_transaction();
+    if let Some(diana) = engine.get_record(&mut tx, "users", 4) {
+        println!("\nDiana's updated record:");
+        println!("  Salary: {}", diana.get_field("salary").unwrap());
+        println!("  Work Mode: {}", diana.get_field("work_mode").unwrap());
+    }
+
+    if let Some(max) = engine.get_record(&mut tx, "animals", 1) {
+        println!("\nMax's updated record:");
+        println!("  Temperament: {}", max.get_field("temperament").unwrap());
+        println!(
+            "  House Trained: {}",
+            max.get_field("house_trained").unwrap()
+        );
+    }
+
+    engine.commit(tx).unwrap();
+    println!("\n✅ Real Updates completed successfully");
 
     // Final State Display
     println!("\n📊 Final Database State:");
