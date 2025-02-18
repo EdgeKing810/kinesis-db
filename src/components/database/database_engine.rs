@@ -372,6 +372,15 @@ impl DBEngine {
                 .or_insert_with(|| Table::new(schema.clone()));
         }
 
+        // Apply schema updates
+        for (table_name, new_schema) in &tx.pending_schema_updates {
+            if let Some(table) = db_lock.tables.get_mut(table_name) {
+                if table.schema.version < new_schema.version {
+                    table.update_schema(new_schema.clone())?;
+                }
+            }
+        }
+
         for (table_name, mut record) in tx.pending_inserts.clone() {
             record.version += 1;
             record.timestamp = timestamp;
@@ -511,6 +520,7 @@ impl DBEngine {
         let schema = TableSchema {
             name: table_name.to_string(),
             fields: HashMap::new(),
+            version: 0,
         };
         tx.pending_table_creates
             .push((table_name.to_string(), schema));
@@ -693,7 +703,13 @@ impl DBEngine {
             HashMap<String, TableSchema>,
         ) = {
             let toc = toc_frame.get_page().read().unwrap();
-            bincode::deserialize(&toc.data).unwrap_or_default()
+            match bincode::deserialize(&toc.data) {
+                Ok(data) => data,
+                Err(e) => {
+                    eprintln!("Warning: Failed to deserialize TOC: {}", e);
+                    (HashMap::new(), HashMap::new())
+                }
+            }
         };
         buffer_pool.unpin_page(0, false);
 
@@ -705,6 +721,7 @@ impl DBEngine {
                 .unwrap_or_else(|| TableSchema {
                     name: table_name.clone(),
                     fields: HashMap::new(),
+                    version: 0,
                 });
 
             let mut table = Table::new(schema);
@@ -772,7 +789,7 @@ impl DBEngine {
 
         let mut table_locations = HashMap::new();
         let mut table_schemas = HashMap::new();
-        const MAX_DATA_PER_PAGE: usize = PAGE_SIZE - 64; // Increased usable space
+        const MAX_DATA_PER_PAGE: usize = PAGE_SIZE - 64;
 
         for (table_name, table) in &db_lock.tables {
             let mut page_ids = Vec::new();
@@ -934,5 +951,27 @@ impl DBEngine {
         Ok(u64::from_be_bytes(
             hasher.finalize()[..8].try_into().unwrap(),
         ))
+    }
+
+    #[allow(dead_code)]
+    pub fn update_table_schema(
+        &mut self,
+        tx: &mut Transaction,
+        table_name: &str,
+        new_schema: TableSchema,
+    ) -> Result<(), String> {
+        let db = self.db.read().unwrap();
+
+        if let Some(table) = db.tables.get(table_name) {
+            // Verify schema can be migrated before adding to transaction
+            new_schema.can_migrate_from(&table.schema)?;
+
+            // Add to pending schema updates instead of write_set
+            tx.pending_schema_updates
+                .push((table_name.to_string(), new_schema));
+            Ok(())
+        } else {
+            Err(format!("Table '{}' not found", table_name))
+        }
     }
 }

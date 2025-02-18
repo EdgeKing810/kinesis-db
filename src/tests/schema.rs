@@ -38,6 +38,7 @@ fn test_schema_validation() {
     let schema = TableSchema {
         name: "users".to_string(),
         fields,
+        version: 0,
     };
 
     // Create table with schema
@@ -88,6 +89,7 @@ fn test_required_fields_validation() {
     let schema = TableSchema {
         name: "users".to_string(),
         fields,
+        version: 0,
     };
 
     // Create table with schema
@@ -152,6 +154,7 @@ fn test_field_type_validation() {
     let schema = TableSchema {
         name: "test_types".to_string(),
         fields,
+        version: 0,
     };
 
     engine.create_table_with_schema(&mut tx, "test_types", schema);
@@ -226,6 +229,7 @@ fn test_unique_constraint() {
     let schema = TableSchema {
         name: "users".to_string(),
         fields,
+        version: 0,
     };
 
     // Create table with schema
@@ -307,6 +311,7 @@ fn test_default_values() {
     let schema = TableSchema {
         name: "users".to_string(),
         fields,
+        version: 0,
     };
 
     // Create table with schema
@@ -329,4 +334,164 @@ fn test_default_values() {
     } else {
         panic!("Record not found");
     }
+}
+
+#[test]
+fn test_schema_updates() {
+    let mut engine = setup_test_db("schema_updates", IsolationLevel::Serializable);
+
+    // Create initial schema
+    let mut fields = HashMap::new();
+    fields.insert(
+        "username".to_string(),
+        FieldConstraint {
+            field_type: FieldType::String,
+            required: true,
+            min: None,
+            max: None,
+            pattern: None,
+            unique: true,
+            default: None,
+        },
+    );
+    fields.insert(
+        "age".to_string(),
+        FieldConstraint {
+            field_type: FieldType::Integer,
+            required: false,
+            min: Some(0.0),
+            max: Some(150.0),
+            pattern: None,
+            unique: false,
+            default: None,
+        },
+    );
+
+    let initial_schema = TableSchema {
+        name: "users".to_string(),
+        fields,
+        version: 1,
+    };
+
+    // Create table and insert initial records
+    let mut tx = engine.begin_transaction();
+    engine.create_table_with_schema(&mut tx, "users", initial_schema.clone());
+    engine.commit(tx).unwrap();
+
+    // Insert some test records
+    let mut tx = engine.begin_transaction();
+    let mut record1 = Record::new(1);
+    record1.set_field("username", ValueType::Str("user1".to_string()));
+    record1.set_field("age", ValueType::Int(25));
+    engine.insert_record(&mut tx, "users", record1).unwrap();
+
+    let mut record2 = Record::new(2);
+    record2.set_field("username", ValueType::Str("user2".to_string()));
+    // Note: age is optional, so we don't set it
+    engine.insert_record(&mut tx, "users", record2).unwrap();
+    engine.commit(tx).unwrap();
+
+    // Test 1: Try to change field type (should fail)
+    let mut tx = engine.begin_transaction();
+    let mut bad_schema = initial_schema.clone();
+    bad_schema.version = 2;
+    if let Some(field) = bad_schema.fields.get_mut("age") {
+        field.field_type = FieldType::String;
+    }
+    assert!(engine
+        .update_table_schema(&mut tx, "users", bad_schema)
+        .is_err());
+
+    // Test 2: Try to make optional field required without default (should fail)
+    let mut tx = engine.begin_transaction();
+    let mut bad_schema = initial_schema.clone();
+    bad_schema.version = 2;
+    if let Some(field) = bad_schema.fields.get_mut("age") {
+        field.required = true;
+    }
+    assert!(engine
+        .update_table_schema(&mut tx, "users", bad_schema)
+        .is_err());
+
+    // Test 3: Add new optional field (should succeed)
+    let mut tx = engine.begin_transaction();
+    let mut new_schema = initial_schema.clone();
+    new_schema.version = 2;
+    new_schema.fields.insert(
+        "email".to_string(),
+        FieldConstraint {
+            field_type: FieldType::String,
+            required: false,
+            min: None,
+            max: None,
+            pattern: Some(r"^[^@]+@[^@]+\.[^@]+$".to_string()),
+            unique: true,
+            default: None,
+        },
+    );
+    assert!(engine
+        .update_table_schema(&mut tx, "users", new_schema.clone())
+        .is_ok());
+    engine.commit(tx).unwrap();
+
+    // Test 4: Add new required field with default (should succeed)
+    let mut tx = engine.begin_transaction();
+    let mut newer_schema = new_schema.clone();
+    newer_schema.version = 3;
+    newer_schema.fields.insert(
+        "active".to_string(),
+        FieldConstraint {
+            field_type: FieldType::Boolean,
+            required: true,
+            min: None,
+            max: None,
+            pattern: None,
+            unique: false,
+            default: Some(ValueType::Bool(true)),
+        },
+    );
+    assert!(engine
+        .update_table_schema(&mut tx, "users", newer_schema.clone())
+        .is_ok());
+    engine.commit(tx).unwrap();
+
+    // Verify that existing records were properly migrated
+    let mut tx = engine.begin_transaction();
+    let record1 = engine.get_record(&mut tx, "users", 1).unwrap();
+    let record2 = engine.get_record(&mut tx, "users", 2).unwrap();
+
+    // Check that old fields are preserved
+    assert_eq!(
+        record1.get_field("username"),
+        Some(&ValueType::Str("user1".to_string()))
+    );
+    assert_eq!(record1.get_field("age"), Some(&ValueType::Int(25)));
+    assert_eq!(
+        record2.get_field("username"),
+        Some(&ValueType::Str("user2".to_string()))
+    );
+    assert_eq!(record2.get_field("age"), None);
+
+    // Check that new default values were applied
+    assert_eq!(record1.get_field("active"), Some(&ValueType::Bool(true)));
+    assert_eq!(record2.get_field("active"), Some(&ValueType::Bool(true)));
+
+    // Test 5: Try to update schema with lower version (should fail)
+    let mut tx = engine.begin_transaction();
+    let mut old_version_schema = newer_schema.clone();
+    old_version_schema.version = 2;
+    assert!(engine
+        .update_table_schema(&mut tx, "users", old_version_schema)
+        .is_err());
+
+    // Test 6: Test unique constraint with default values
+    let mut tx = engine.begin_transaction();
+    let mut unique_schema = newer_schema;
+    unique_schema.version = 4;
+    if let Some(field) = unique_schema.fields.get_mut("active") {
+        field.unique = true; // Try to make boolean field unique with same default (should fail)
+    }
+    assert!(engine
+        .update_table_schema(&mut tx, "users", unique_schema)
+        .is_err());
 }

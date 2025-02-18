@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     sync::{Arc, RwLock},
 };
 
@@ -140,5 +140,52 @@ impl Table {
             })
             .cloned()
             .collect()
+    }
+
+    pub fn update_schema(&mut self, new_schema: TableSchema) -> Result<(), String> {
+        if new_schema.version <= self.schema.version {
+            return Err("New schema version must be greater than the current version".to_string());
+        }
+
+        // Verify schema compatibility
+        new_schema.can_migrate_from(&self.schema)?;
+
+        // Collect all records for migration
+        let mut records: Vec<_> = self
+            .data
+            .values()
+            .map(|r| r.read().unwrap().clone())
+            .collect();
+
+        // Migrate each record
+        for record in &mut records {
+            new_schema.migrate_record(record)?;
+        }
+
+        // Verify unique constraints across all records
+        for (field_name, constraint) in &new_schema.fields {
+            if constraint.unique {
+                let mut seen_values = HashMap::new();
+                for record in &records {
+                    if let Some(value) = record.values.get(field_name) {
+                        if let Some(existing_id) = seen_values.insert(value.clone(), record.id) {
+                            return Err(format!(
+                                "Unique constraint violation for field '{}': duplicate value in records {} and {}",
+                                field_name, existing_id, record.id
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
+        // If all validations pass, update the schema and records
+        self.schema = new_schema;
+        self.data.clear();
+        for record in records {
+            self.data.insert(record.id, Arc::new(RwLock::new(record)));
+        }
+
+        Ok(())
     }
 }

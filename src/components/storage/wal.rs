@@ -95,6 +95,16 @@ impl WriteAheadLog {
                     }
                 }
 
+                // Restore schema updates
+                if let Some(updates) = entry["schema_updates"].as_array() {
+                    for update in updates {
+                        let table = update[0].as_str().unwrap();
+                        let schema: TableSchema =
+                            serde_json::from_value(update[1].clone()).unwrap();
+                        tx.pending_schema_updates.push((table.to_string(), schema));
+                    }
+                }
+
                 // Restore deletes
                 if let Some(deletes) = entry["deletes"].as_array() {
                     for delete in deletes {
@@ -179,6 +189,7 @@ impl WriteAheadLog {
                 .as_secs(),
             "table_creates": &tx.pending_table_creates,
             "table_drops": &tx.pending_table_drops,
+            "schema_updates": &tx.pending_schema_updates,
             "inserts": &tx.pending_inserts,
             "deletes": &tx.pending_deletes,
             "status": "pending"

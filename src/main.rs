@@ -67,6 +67,7 @@ fn main() {
     let users_schema = TableSchema {
         name: "users".to_string(),
         fields,
+        version: 0,
     };
 
     let mut fields = HashMap::new();
@@ -114,6 +115,7 @@ fn main() {
     let animals_schema = TableSchema {
         name: "animals".to_string(),
         fields,
+        version: 0,
     };
 
     // Create tables
