@@ -1,12 +1,11 @@
-use std::collections::HashMap;
 use std::fs::create_dir_all;
 
 use components::database::db_type::DatabaseType;
 use components::database::engine::DBEngine;
 use components::database::record::Record;
 use components::database::restore_policy::RestorePolicy;
-use components::database::schema::{FieldConstraint, FieldType, TableSchema};
 use components::database::value_type::ValueType;
+use components::repl::{OutputFormat, REPL};
 use components::transaction::config::TransactionConfig;
 use components::transaction::isolation_level::IsolationLevel;
 
@@ -21,6 +20,8 @@ fn main() {
         deadlock_detection_interval_ms: 50, // Faster detection
     };
 
+    println!("\n🚀 Initializing Database...");
+
     let mut engine = DBEngine::new(
         DatabaseType::Hybrid,
         RestorePolicy::RecoverPending,
@@ -30,103 +31,42 @@ fn main() {
         IsolationLevel::Serializable,
     );
 
-    println!("\n🚀 Initializing Database...");
-    // Create data directory
+    let mut repl = REPL::new(&mut engine);
 
     // Create table schemas
-    let mut fields = HashMap::new();
-    fields.insert(
-        "name".to_string(),
-        FieldConstraint::create_required(FieldType::String),
-    );
-    fields.insert(
-        "age".to_string(),
-        FieldConstraint::create_required(FieldType::Integer),
-    );
-    fields.insert(
-        "role".to_string(),
-        FieldConstraint::create_required(FieldType::String),
-    );
-    fields.insert(
-        "salary".to_string(),
-        FieldConstraint::create_required(FieldType::Float),
-    );
-    fields.insert(
-        "senior".to_string(),
-        FieldConstraint::create_required(FieldType::Boolean),
-    );
-    fields.insert(
-        "department".to_string(),
-        FieldConstraint::create_required(FieldType::String),
-    );
-    fields.insert(
-        "work_mode".to_string(),
-        FieldConstraint::create_required(FieldType::String),
-    );
+    let users_schema = r#"
+        CREATE_TABLE users 
+            name       STRING  --required
+            age        INTEGER --required
+            role       STRING  --required
+            salary     FLOAT   --required
+            senior     BOOLEAN --required
+            department STRING  --required
+            work_mode  STRING  --required
+    "#;
 
-    let users_schema = TableSchema {
-        name: "users".to_string(),
-        fields,
-        version: 0,
-    };
-
-    let mut fields = HashMap::new();
-    fields.insert(
-        "name".to_string(),
-        FieldConstraint::create_required(FieldType::String),
-    );
-    fields.insert(
-        "species".to_string(),
-        FieldConstraint::create_required(FieldType::String),
-    );
-    fields.insert(
-        "age".to_string(),
-        FieldConstraint::create_required(FieldType::Integer),
-    );
-    fields.insert(
-        "weight".to_string(),
-        FieldConstraint::create_required(FieldType::Float),
-    );
-    fields.insert(
-        "vaccinated".to_string(),
-        FieldConstraint::create_required(FieldType::Boolean),
-    );
-    fields.insert(
-        "breed".to_string(),
-        FieldConstraint::create_required(FieldType::String),
-    );
-    fields.insert(
-        "temperament".to_string(),
-        FieldConstraint::create_required(FieldType::String),
-    );
-    fields.insert(
-        "size".to_string(),
-        FieldConstraint::create_required(FieldType::String),
-    );
-    fields.insert(
-        "house_trained".to_string(),
-        FieldConstraint::create_required(FieldType::Boolean),
-    );
-    fields.insert(
-        "origin".to_string(),
-        FieldConstraint::create_required(FieldType::String),
-    );
-
-    let animals_schema = TableSchema {
-        name: "animals".to_string(),
-        fields,
-        version: 0,
-    };
+    let animals_schema = r#"
+        CREATE_TABLE animals 
+            name          STRING  --required
+            species       STRING  --required
+            age           INTEGER --required
+            weight        FLOAT   --required
+            vaccinated    BOOLEAN --required
+            breed         STRING  --required
+            temperament   STRING  --required
+            size          STRING  --required
+            house_trained BOOLEAN --required
+            origin        STRING  --required
+    "#;
 
     // Create tables
-    let mut tx = engine.begin_transaction();
-    engine.create_table_with_schema(&mut tx, "users", users_schema);
-    engine.create_table_with_schema(&mut tx, "animals", animals_schema);
-    engine.commit(tx).unwrap();
+    repl.execute(users_schema, Some(OutputFormat::Standard))
+        .unwrap();
+    repl.execute(animals_schema, Some(OutputFormat::Standard))
+        .unwrap();
     println!("✅ Tables created successfully");
 
     // Insert users with more properties
-    let mut tx = engine.begin_transaction();
     let users = vec![
         (
             1,
@@ -202,22 +142,25 @@ fn main() {
     ];
 
     for (id, name, age, role, salary, senior, department, work_mode) in users {
-        let mut record = Record::new(id);
-        record.set_field("name", ValueType::Str(name.to_string()));
-        record.set_field("age", ValueType::Int(age));
-        record.set_field("role", ValueType::Str(role.to_string()));
-        record.set_field("salary", ValueType::Float(salary));
-        record.set_field("senior", ValueType::Bool(senior));
-        record.set_field("department", ValueType::Str(department.to_string()));
-        record.set_field("work_mode", ValueType::Str(work_mode.to_string()));
+        let record = format!(
+            r#"
+            INSERT INTO users ID {} SET
+                name       = "{}"
+                age        = {}
+                role       = "{}"
+                salary     = {}
+                senior     = {}
+                department = "{}"
+                work_mode  = "{}"
+        "#,
+            id, name, age, role, salary, senior, department, work_mode
+        );
 
-        engine.insert_record(&mut tx, "users", record).unwrap();
+        repl.execute(&record, Some(OutputFormat::Standard)).unwrap();
     }
-    engine.commit(tx).unwrap();
     println!("✅ Users data inserted");
 
     // Insert diverse animals
-    let mut tx = engine.begin_transaction();
     let animals = vec![
         // Dogs
         (
@@ -365,189 +308,121 @@ fn main() {
         origin,
     ) in animals
     {
-        let mut record = Record::new(id);
-        record.set_field("name", ValueType::Str(name.to_string()));
-        record.set_field("species", ValueType::Str(species.to_string()));
-        record.set_field("age", ValueType::Int(age));
-        record.set_field("weight", ValueType::Float(weight));
-        record.set_field("vaccinated", ValueType::Bool(vaccinated));
-        record.set_field("breed", ValueType::Str(breed.to_string()));
-        record.set_field("temperament", ValueType::Str(temperament.to_string()));
-        record.set_field("size", ValueType::Str(size.to_string()));
-        record.set_field("house_trained", ValueType::Bool(house_trained));
-        record.set_field("origin", ValueType::Str(origin.to_string()));
+        let record = format!(
+            r#"
+            INSERT INTO animals ID {} SET
+                name          = "{}"
+                species       = "{}"
+                age           = {}
+                weight        = {}
+                vaccinated    = {}
+                breed         = "{}"
+                temperament   = "{}"
+                size          = "{}"
+                house_trained = {}
+                origin        = "{}"
+        "#,
+            id,
+            name,
+            species,
+            age,
+            weight,
+            vaccinated,
+            breed,
+            temperament,
+            size,
+            house_trained,
+            origin
+        );
 
-        engine.insert_record(&mut tx, "animals", record).unwrap();
+        repl.execute(&record, Some(OutputFormat::Standard)).unwrap();
     }
-    engine.commit(tx).unwrap();
     println!("✅ Animals data inserted");
 
     // Advanced Queries
     println!("\n🔍 Running Queries...");
 
-    let mut tx = engine.begin_transaction();
-
     // User queries
     println!("\n👥 User Statistics:");
-    let remote_workers = engine.search_records(&mut tx, "users", "Remote");
-    println!("Remote Workers: {}", remote_workers.len());
+    let remote_workers = repl
+        .execute(
+            "SEARCH_RECORDS FROM users MATCH Remote",
+            Some(OutputFormat::Table),
+        )
+        .unwrap();
+    println!(
+        "Remote Workers: {}",
+        (remote_workers.split('\n').count() - 3) / 2
+    );
 
-    let senior_staff = engine.search_records(&mut tx, "users", "Senior");
-    println!("Senior Staff Members: {}", senior_staff.len());
+    let senior_staff = repl
+        .execute(
+            "SEARCH_RECORDS FROM users MATCH Senior",
+            Some(OutputFormat::Table),
+        )
+        .unwrap();
+    println!(
+        "Senior Staff Members: {}",
+        (senior_staff.split('\n').count() - 3) / 2
+    );
 
     // Animal queries
     println!("\n🐾 Animal Statistics:");
     for species in [
         "Dog", "Cat", "Parrot", "Snake", "Lizard", "Horse", "Sheep", "Pig",
     ] {
-        let animals = engine.search_records(&mut tx, "animals", species);
-        println!("{} count: {}", species, animals.len());
-    }
-
-    // Test complex updates
-    println!("\n✏️ Testing Fake Updates...");
-    let mut tx = engine.begin_transaction();
-
-    // Promote an employee
-    engine.delete_record(&mut tx, "users", 4);
-    let mut promoted_user_record = Record::new(4);
-    promoted_user_record.set_field("name", ValueType::Str("Diana".to_string()));
-    promoted_user_record.set_field("age", ValueType::Int(29));
-    promoted_user_record.set_field("role", ValueType::Str("Lead Data Scientist".to_string()));
-    promoted_user_record.set_field("salary", ValueType::Float(120000.0));
-    promoted_user_record.set_field("senior", ValueType::Bool(true));
-    promoted_user_record.set_field("department", ValueType::Str("Analytics".to_string()));
-    promoted_user_record.set_field("work_mode", ValueType::Str("Hybrid".to_string()));
-
-    engine
-        .insert_record(&mut tx, "users", promoted_user_record)
-        .unwrap();
-
-    // Update animal training status
-    engine.delete_record(&mut tx, "animals", 6);
-    let mut trained_cat_record = Record::new(6);
-    trained_cat_record.set_field("name", ValueType::Str("Lucy".to_string()));
-    trained_cat_record.set_field("species", ValueType::Str("Cat".to_string()));
-    trained_cat_record.set_field("age", ValueType::Int(2));
-    trained_cat_record.set_field("weight", ValueType::Float(3.5));
-    trained_cat_record.set_field("vaccinated", ValueType::Bool(true));
-    trained_cat_record.set_field("breed", ValueType::Str("Siamese".to_string()));
-    trained_cat_record.set_field("temperament", ValueType::Str("Well-behaved".to_string()));
-    trained_cat_record.set_field("size", ValueType::Str("Small".to_string()));
-    trained_cat_record.set_field("house_trained", ValueType::Bool(true));
-    trained_cat_record.set_field("origin", ValueType::Str("Thailand".to_string()));
-
-    engine
-        .insert_record(&mut tx, "animals", trained_cat_record)
-        .unwrap();
-
-    engine.commit(tx).unwrap();
-    println!("✅ Fake Updates completed successfully");
-
-    println!("\n✏️ Testing Real Updates...");
-    let mut tx = engine.begin_transaction();
-
-    // Update Diana's salary and work mode
-    let mut salary_update = HashMap::new();
-    salary_update.insert("salary".to_string(), ValueType::Float(120000.0));
-    salary_update.insert(
-        "work_mode".to_string(),
-        ValueType::Str("Hybrid".to_string()),
-    );
-
-    if let Err(e) = engine.update_record(&mut tx, "users", 4, salary_update) {
-        println!("Failed to update Diana's record: {}", e);
-    }
-
-    // Update Max's training status and temperament
-    let mut pet_update = HashMap::new();
-    pet_update.insert(
-        "temperament".to_string(),
-        ValueType::Str("Very Friendly".to_string()),
-    );
-    pet_update.insert("house_trained".to_string(), ValueType::Bool(true));
-
-    if let Err(e) = engine.update_record(&mut tx, "animals", 1, pet_update) {
-        println!("Failed to update Max's record: {}", e);
-    }
-
-    engine.commit(tx).unwrap();
-
-    // Verify updates
-    let mut tx = engine.begin_transaction();
-    if let Some(diana) = engine.get_record(&mut tx, "users", 4) {
-        println!("\nDiana's updated record:");
-        println!("  Salary: {}", diana.get_field("salary").unwrap());
-        println!("  Work Mode: {}", diana.get_field("work_mode").unwrap());
-    }
-
-    if let Some(max) = engine.get_record(&mut tx, "animals", 1) {
-        println!("\nMax's updated record:");
-        println!("  Temperament: {}", max.get_field("temperament").unwrap());
+        let query = format!("SEARCH_RECORDS FROM animals MATCH {}", species);
+        let animals = repl.execute(&query, Some(OutputFormat::Table)).unwrap();
         println!(
-            "  House Trained: {}",
-            max.get_field("house_trained").unwrap()
+            "{} count: {}",
+            species,
+            (animals.split('\n').count() - 3) / 2
         );
     }
 
-    engine.commit(tx).unwrap();
-    println!("\n✅ Real Updates completed successfully");
+    // Test complex updates
+    println!("\n✏️ Testing Updates...");
+
+    // Promote an employee
+    let promoted_user_record = r#"
+        UPDATE users ID 4 SET
+            age        = 29
+            role       = "Lead Data Scientist"
+            salary     = 120000.0
+            work_mode  = "Hybrid"
+    "#;
+    repl.execute(&promoted_user_record, Some(OutputFormat::Standard))
+        .unwrap();
+
+    // Update animal training status
+    let trained_cat_record = r#"
+        UPDATE animals ID 6 SET
+            vaccinated    = true
+            temperament   = "Well-behaved"
+    "#;
+    repl.execute(&trained_cat_record, Some(OutputFormat::Standard))
+        .unwrap();
+
+    println!("✅ Updates completed successfully");
 
     // Final State Display
     println!("\n📊 Final Database State:");
-    let mut final_tx = engine.begin_transaction();
 
     println!("\n👥 Users:");
-    for id in 1..=8 {
-        if let Some(user) = engine.get_record(&mut final_tx, "users", id) {
-            println!(
-                "ID {}: {} - {} ({})",
-                id,
-                match &user.get_field("name").unwrap() {
-                    ValueType::Str(s) => s,
-                    _ => "?",
-                },
-                match &user.get_field("role").unwrap() {
-                    ValueType::Str(s) => s,
-                    _ => "?",
-                },
-                match &user.get_field("department").unwrap() {
-                    ValueType::Str(s) => s,
-                    _ => "?",
-                }
-            );
-        }
-    }
+    let fetch_users = "GET_RECORDS FROM users";
+    println!(
+        "{}",
+        repl.execute(fetch_users, Some(OutputFormat::Table))
+            .unwrap()
+    );
 
     println!("\n🐾 Animals:");
-    for id in 1..=12 {
-        if let Some(animal) = engine.get_record(&mut final_tx, "animals", id) {
-            println!(
-                "ID {}: {} - {} {} ({}, {})",
-                id,
-                match &animal.get_field("name").unwrap() {
-                    ValueType::Str(s) => s,
-                    _ => "?",
-                },
-                match &animal.get_field("breed").unwrap() {
-                    ValueType::Str(s) => s,
-                    _ => "?",
-                },
-                match &animal.get_field("species").unwrap() {
-                    ValueType::Str(s) => s,
-                    _ => "?",
-                },
-                match &animal.get_field("temperament").unwrap() {
-                    ValueType::Str(s) => s,
-                    _ => "?",
-                },
-                match &animal.get_field("origin").unwrap() {
-                    ValueType::Str(s) => s,
-                    _ => "?",
-                }
-            );
-        }
-    }
+    let fetch_animals = "GET_RECORDS FROM animals";
+    println!(
+        "{}",
+        repl.execute(fetch_animals, Some(OutputFormat::Table))
+            .unwrap()
+    );
 
     println!("\n✨ Database operations completed successfully!");
 }

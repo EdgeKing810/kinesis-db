@@ -13,6 +13,7 @@ mod error_cases;
 mod isolation_levels;
 mod large_data_persistence;
 mod performance;
+mod repl;
 mod rollback;
 mod schema;
 mod wal_operations;

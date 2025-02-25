@@ -20,15 +20,24 @@ impl Serialize for Table {
     where
         S: Serializer,
     {
+        use serde::ser::Error;
         let mut map = serializer.serialize_map(None)?;
+
+        // Serialize schema
         map.serialize_entry("schema", &self.schema)?;
-        // Convert to regular records for serialization
-        let records: BTreeMap<u64, Record> = self
+
+        // Convert locked records to plain records for serialization
+        let records: Result<HashMap<String, Record>, S::Error> = self
             .data
             .iter()
-            .map(|(k, v)| (*k, v.read().unwrap().clone()))
+            .map(|(k, v)| {
+                v.read()
+                    .map(|record| (k.to_string(), record.clone()))
+                    .map_err(|_| Error::custom("Failed to read record"))
+            })
             .collect();
-        map.serialize_entry("data", &records)?;
+
+        map.serialize_entry("data", &records?)?;
         map.end()
     }
 }

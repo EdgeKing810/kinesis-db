@@ -18,6 +18,7 @@ impl FieldType {
             (FieldType::String, ValueType::Str(_))
                 | (FieldType::Integer, ValueType::Int(_))
                 | (FieldType::Float, ValueType::Float(_))
+                | (FieldType::Float, ValueType::Int(_))
                 | (FieldType::Boolean, ValueType::Bool(_))
         )
     }
@@ -120,6 +121,18 @@ impl FieldConstraint {
                 if let Some(max) = self.max {
                     if *f > max {
                         return Err(format!("Float exceeds maximum of {}", max));
+                    }
+                }
+            }
+            (ValueType::Int(i), FieldType::Float) => {
+                if let Some(min) = self.min {
+                    if (*i as f64) < min {
+                        return Err(format!("Integer below minimum of {}", min));
+                    }
+                }
+                if let Some(max) = self.max {
+                    if (*i as f64) > max {
+                        return Err(format!("Integer exceeds maximum of {}", max));
                     }
                 }
             }

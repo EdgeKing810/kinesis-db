@@ -1,5 +1,5 @@
 
-running 36 tests
+running 43 tests
 test tests::buffer_pool::test_large_data_handling ... ok
 test tests::basic_operations::test_create_table ... ok
 test tests::buffer_pool::test_edge_case_page_sizes ... ok
@@ -12,30 +12,37 @@ test tests::database_types::test_ondisk_database ... ok
 test tests::database_types::test_wal_per_database_type ... ok
 test tests::error_cases::test_invalid_table_operations ... ok
 test tests::database_types::test_recovery_by_database_type ... ok
-test tests::database_types::test_ondisk_buffer_eviction ... ok
 test tests::isolation_levels::test_read_committed_isolation ... ok
-test tests::isolation_levels::test_serializable_isolation ... ok
 test tests::isolation_levels::test_repeatable_read_isolation ... ok
-test tests::rollback::test_rollback_record_operations ... ok
-test tests::rollback::test_rollback_table_operations ... ok
+test tests::isolation_levels::test_serializable_isolation ... ok
+test tests::database_types::test_ondisk_buffer_eviction ... ok
+test tests::concurrency::test_concurrent_large_data ... ok
 test tests::large_data_persistence::test_large_data_persistence ... ok
+test tests::repl::test_repl_error_handling ... ok
+test tests::performance::test_bulk_operations ... ok
+test tests::repl::test_repl_format_specific_behavior ... ok
+test tests::repl::test_repl_help ... ok
+test tests::repl::test_repl_output_formats ... ok
+test tests::repl::test_repl_comprehensive ... ok
+test tests::rollback::test_rollback_table_operations ... ok
+test tests::rollback::test_rollback_record_operations ... ok
 test tests::schema::test_default_values ... ok
 test tests::schema::test_field_type_validation ... ok
-test tests::concurrency::test_concurrent_large_data ... ok
+test tests::repl::test_repl_search_records ... ok
 test tests::schema::test_required_fields_validation ... ok
-test tests::performance::test_bulk_operations ... ok
-test tests::schema::test_record_updates ... ok
+test tests::repl::test_repl_table_output ... ok
 test tests::schema::test_schema_validation ... ok
-test tests::schema::test_unique_constraint ... ok
+test tests::schema::test_record_updates ... ok
 test tests::schema::test_schema_updates ... ok
+test tests::schema::test_unique_constraint ... ok
 test tests::wal_operations::test_wal_recovery ... ok
-test tests::database_types::test_hybrid_mode_behavior ... ok
 test tests::concurrency::test_concurrent_operations ... ok
+test tests::database_types::test_hybrid_mode_behavior ... ok
 test tests::database_types::test_hybrid_database ... ok
 test tests::wal_operations::test_wal_rotation ... ok
 test tests::database_types::test_concurrent_bulk_operations ... ok
 test tests::benchmark::test_write_benchmark ... ok
 test tests::benchmark::test_read_benchmark ... ok
 
-test result: ok. 36 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 19.20s
+test result: ok. 43 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 18.95s
 

@@ -24,6 +24,7 @@ impl Record {
         self.values.insert(field.to_string(), value);
     }
 
+    #[allow(dead_code)]
     pub fn get_field(&self, field: &str) -> Option<&ValueType> {
         self.values.get(field)
     }

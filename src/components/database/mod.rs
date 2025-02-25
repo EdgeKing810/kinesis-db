@@ -1,7 +1,7 @@
 #[path = "database.rs"]
 pub mod database;
 
-#[path = "database_type.rs"]
+#[path = "type.rs"]
 pub mod db_type;
 
 #[path = "value_type.rs"]
@@ -13,7 +13,7 @@ pub mod record;
 #[path = "table.rs"]
 pub mod table;
 
-#[path = "database_engine.rs"]
+#[path = "engine.rs"]
 pub mod engine;
 
 #[path = "restore_policy.rs"]

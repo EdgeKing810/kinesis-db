@@ -1,6 +1,6 @@
-Loaded 0 transactions according to RecoverPending policy:
 
 🚀 Initializing Database...
+Loaded 0 transactions according to RecoverPending policy:
 ✅ Tables created successfully
 ✅ Users data inserted
 ✅ Animals data inserted
@@ -21,45 +21,59 @@ Horse count: 1
 Sheep count: 1
 Pig count: 1
 
-✏️ Testing Fake Updates...
-✅ Fake Updates completed successfully
-
-✏️ Testing Real Updates...
-
-Diana's updated record:
-  Salary: 120000
-  Work Mode: Hybrid
-
-Max's updated record:
-  Temperament: Very Friendly
-  House Trained: true
-
-✅ Real Updates completed successfully
+✏️ Testing Updates...
+✅ Updates completed successfully
 
 📊 Final Database State:
 
 👥 Users:
-ID 1: Alice - Senior Developer (Engineering)
-ID 2: Bob - UI Designer (Design)
-ID 3: Charlie - Product Manager (Management)
-ID 4: Diana - Lead Data Scientist (Analytics)
-ID 5: Eve - DevOps Engineer (Infrastructure)
-ID 6: Frank - CTO (Executive)
-ID 7: Grace - QA Engineer (Quality)
-ID 8: Henry - Solutions Architect (Engineering)
++----+-----+----------------+---------+---------------------+----------+--------+-----------+
+| ID | age | department     | name    | role                | salary   | senior | work_mode |
++----+-----+----------------+---------+---------------------+----------+--------+-----------+
+| 1  | 30  | Engineering    | Alice   | Senior Developer    | 95000    | true   | Remote    |
++----+-----+----------------+---------+---------------------+----------+--------+-----------+
+| 2  | 25  | Design         | Bob     | UI Designer         | 75000    | false  | Office    |
++----+-----+----------------+---------+---------------------+----------+--------+-----------+
+| 3  | 35  | Management     | Charlie | Product Manager     | 120000   | true   | Hybrid    |
++----+-----+----------------+---------+---------------------+----------+--------+-----------+
+| 4  | 29  | Analytics      | Diana   | Lead Data Scientist | 120000.0 | true   | Hybrid    |
++----+-----+----------------+---------+---------------------+----------+--------+-----------+
+| 5  | 32  | Infrastructure | Eve     | DevOps Engineer     | 105000   | true   | Remote    |
++----+-----+----------------+---------+---------------------+----------+--------+-----------+
+| 6  | 41  | Executive      | Frank   | CTO                 | 180000   | true   | Office    |
++----+-----+----------------+---------+---------------------+----------+--------+-----------+
+| 7  | 27  | Quality        | Grace   | QA Engineer         | 72000    | false  | Hybrid    |
++----+-----+----------------+---------+---------------------+----------+--------+-----------+
+| 8  | 38  | Engineering    | Henry   | Solutions Architect | 125000   | true   | Remote    |
++----+-----+----------------+---------+---------------------+----------+--------+-----------+
 
 🐾 Animals:
-ID 1: Max - Golden Retriever Dog (Very Friendly, USA)
-ID 2: Luna - German Shepherd Dog (Protective, Germany)
-ID 3: Rocky - French Bulldog Dog (Playful, France)
-ID 4: Bella - Persian Cat (Lazy, Iran)
-ID 5: Oliver - Maine Coon Cat (Independent, USA)
-ID 6: Lucy - Siamese Cat (Well-behaved, Thailand)
-ID 7: Ziggy - African Grey Parrot (Talkative, Congo)
-ID 8: Monty - Ball Python Snake (Calm, Africa)
-ID 9: Spike - Bearded Dragon Lizard (Friendly, Australia)
-ID 10: Thunder - Arabian Horse (Spirited, Arabia)
-ID 11: Wooley - Merino Sheep (Gentle, Australia)
-ID 12: Einstein - Vietnamese Pot-Belly Pig (Smart, Vietnam)
++----+-----+----------------------+---------------+----------+-----------+--------+---------+--------------+------------+--------+
+| ID | age | breed                | house_trained | name     | origin    | size   | species | temperament  | vaccinated | weight |
++----+-----+----------------------+---------------+----------+-----------+--------+---------+--------------+------------+--------+
+| 1  | 5   | Golden Retriever     | true          | Max      | USA       | Medium | Dog     | Friendly     | true       | 15.5   |
++----+-----+----------------------+---------------+----------+-----------+--------+---------+--------------+------------+--------+
+| 10 | 8   | Arabian              | false         | Thunder  | Arabia    | Large  | Horse   | Spirited     | true       | 450    |
++----+-----+----------------------+---------------+----------+-----------+--------+---------+--------------+------------+--------+
+| 11 | 3   | Merino               | true          | Wooley   | Australia | Medium | Sheep   | Gentle       | true       | 80     |
++----+-----+----------------------+---------------+----------+-----------+--------+---------+--------------+------------+--------+
+| 12 | 1   | Vietnamese Pot-Belly | true          | Einstein | Vietnam   | Medium | Pig     | Smart        | true       | 120    |
++----+-----+----------------------+---------------+----------+-----------+--------+---------+--------------+------------+--------+
+| 2  | 3   | German Shepherd      | false         | Luna     | Germany   | Large  | Dog     | Protective   | true       | 30.2   |
++----+-----+----------------------+---------------+----------+-----------+--------+---------+--------------+------------+--------+
+| 3  | 2   | French Bulldog       | true          | Rocky    | France    | Small  | Dog     | Playful      | true       | 8.5    |
++----+-----+----------------------+---------------+----------+-----------+--------+---------+--------------+------------+--------+
+| 4  | 1   | Persian              | true          | Bella    | Iran      | Medium | Cat     | Lazy         | true       | 3.8    |
++----+-----+----------------------+---------------+----------+-----------+--------+---------+--------------+------------+--------+
+| 5  | 4   | Maine Coon           | false         | Oliver   | USA       | Large  | Cat     | Independent  | true       | 4.2    |
++----+-----+----------------------+---------------+----------+-----------+--------+---------+--------------+------------+--------+
+| 6  | 2   | Siamese              | true          | Lucy     | Thailand  | Small  | Cat     | Well-behaved | true       | 3.5    |
++----+-----+----------------------+---------------+----------+-----------+--------+---------+--------------+------------+--------+
+| 7  | 15  | African Grey         | false         | Ziggy    | Congo     | Medium | Parrot  | Talkative    | true       | 0.4    |
++----+-----+----------------------+---------------+----------+-----------+--------+---------+--------------+------------+--------+
+| 8  | 3   | Ball Python          | true          | Monty    | Africa    | Medium | Snake   | Calm         | false      | 2      |
++----+-----+----------------------+---------------+----------+-----------+--------+---------+--------------+------------+--------+
+| 9  | 2   | Bearded Dragon       | true          | Spike    | Australia | Small  | Lizard  | Friendly     | true       | 0.3    |
++----+-----+----------------------+---------------+----------+-----------+--------+---------+--------------+------------+--------+
 
 ✨ Database operations completed successfully!

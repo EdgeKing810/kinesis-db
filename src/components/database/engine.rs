@@ -558,8 +558,14 @@ impl DBEngine {
     }
 
     #[allow(dead_code)]
-    pub fn drop_table(&self, tx: &mut Transaction, table_name: &str) {
-        tx.pending_table_drops.push(table_name.to_string());
+    pub fn drop_table(&self, tx: &mut Transaction, table_name: &str) -> bool {
+        let db_lock = self.db.read().unwrap();
+        if db_lock.tables.contains_key(table_name) {
+            tx.pending_table_drops.push(table_name.to_string());
+            true
+        } else {
+            false
+        }
     }
 
     #[allow(dead_code)]
@@ -567,6 +573,12 @@ impl DBEngine {
         let db_lock: std::sync::RwLockReadGuard<'_, Database> = self.db.read().unwrap();
         let tables = db_lock.tables.clone();
         tables.keys().cloned().collect()
+    }
+
+    #[allow(dead_code)]
+    pub fn get_table(&self, name: &str) -> Option<Table> {
+        let db = self.db.read().unwrap();
+        db.tables.get(name).cloned()
     }
 
     // ========== Record Operations (within a transaction) ==========
