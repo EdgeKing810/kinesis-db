@@ -1,5 +1,9 @@
 # Kinesis DB
 
+> [!WARNING]
+> Multiple additions and updates have been made to this project since the initial commits but are only present in the production version of [Kinesis API](https://api.kinesis.world).
+> Please consult the [technical documentation](https://api.kinesis.world/docs/technical/kinesis_db.html) to get a better overview of the complete featureset and capabilities.
+
 A high-performance, ACID-compliant embedded database written in Rust with support for multiple storage engines and flexible schema management.
 
 ## Features
